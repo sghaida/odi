@@ -6,7 +6,7 @@ on:
   pull_request:
 
 jobs:
-  go-test-and-upload:
+  coverage:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
@@ -17,10 +17,18 @@ jobs:
 
       - name: Run tests with coverage
         run: |
-          go test ./... -coverprofile=coverage.out -covermode=atomic
+          go test ./... -covermode=atomic -coverpkg=./... -coverprofile=coverage.out
+          test -s coverage.out
+
+      # Convert Go coverprofile -> LCOV
+      - name: Convert coverage to LCOV
+        uses: jandelgado/gcov2lcov-action@v1
+        with:
+          infile: coverage.out
+          outfile: coverage.lcov
 
       - name: Upload coverage to Codacy
         uses: codacy/codacy-coverage-reporter-action@v1
         with:
           project-token: ${{ secrets.CODACY_PROJECT_TOKEN }}
-          coverage-reports: coverage.out
+          coverage-reports: coverage.lcov
