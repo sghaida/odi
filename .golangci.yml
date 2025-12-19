@@ -5,7 +5,6 @@ run:
   tests: true
 
 linters:
-  # v2 defaults to a standard set; set default to none so only your list runs.
   default: none
   enable:
     - govet
@@ -15,7 +14,6 @@ linters:
     - ineffassign
     - unused
     - gosimple
-    - typecheck
     - bodyclose
 
   settings:
