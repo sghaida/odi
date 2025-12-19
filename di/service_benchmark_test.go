@@ -6,18 +6,6 @@ import (
 	"github.com/sghaida/odi/di"
 )
 
-/*
-   Benchmark domain types
-*/
-
-type BenchDB struct{ DSN string }
-type BenchLogger struct{ Level string }
-
-type BenchUserService struct {
-	DB     *BenchDB
-	Logger *BenchLogger
-}
-
 var (
 	dbKey     = di.Key("db")
 	loggerKey = di.Key("logger")
@@ -27,21 +15,21 @@ var (
    Shared helpers (NOT counted in benchmarks)
 */
 
-func newBenchDB() *di.Service[BenchDB] {
-	return di.Init(func() *BenchDB {
-		return &BenchDB{DSN: "postgres"}
+func newBenchDB() *di.Service[di.DB] {
+	return di.Init(func() *di.DB {
+		return &di.DB{DSN: "postgres"}
 	})
 }
 
-func newBenchLogger() *di.Service[BenchLogger] {
-	return di.Init(func() *BenchLogger {
-		return &BenchLogger{Level: "info"}
+func newBenchLogger() *di.Service[di.Logger] {
+	return di.Init(func() *di.Logger {
+		return &di.Logger{Level: "info"}
 	})
 }
 
-func newBenchUser() *di.Service[BenchUserService] {
-	return di.Init(func() *BenchUserService {
-		return &BenchUserService{}
+func newBenchUser() *di.Service[di.UserService] {
+	return di.Init(func() *di.UserService {
+		return &di.UserService{}
 	})
 }
 
@@ -57,7 +45,7 @@ func BenchmarkInit(b *testing.B) {
 
 func BenchmarkWith_SingleDependency(b *testing.B) {
 	db := newBenchDB()
-	injDB := di.Injecting(dbKey, db, func(u *BenchUserService, d *BenchDB) {
+	injDB := di.Injecting(dbKey, db, func(u *di.UserService, d *di.DB) {
 		u.DB = d
 	})
 
@@ -72,10 +60,10 @@ func BenchmarkWithAll_TwoDependencies(b *testing.B) {
 	db := newBenchDB()
 	logger := newBenchLogger()
 
-	injDB := di.Injecting(dbKey, db, func(u *BenchUserService, d *BenchDB) {
+	injDB := di.Injecting(dbKey, db, func(u *di.UserService, d *di.DB) {
 		u.DB = d
 	})
-	injLogger := di.Injecting(loggerKey, logger, func(u *BenchUserService, l *BenchLogger) {
+	injLogger := di.Injecting(loggerKey, logger, func(u *di.UserService, l *di.Logger) {
 		u.Logger = l
 	})
 
@@ -90,7 +78,7 @@ func BenchmarkHas(b *testing.B) {
 	db := newBenchDB()
 	user := newBenchUser()
 
-	_, _ = user.With(di.Injecting(dbKey, db, func(u *BenchUserService, d *BenchDB) {
+	_, _ = user.With(di.Injecting(dbKey, db, func(u *di.UserService, d *di.DB) {
 		u.DB = d
 	}))
 
@@ -104,7 +92,7 @@ func BenchmarkGetAny(b *testing.B) {
 	db := newBenchDB()
 	user := newBenchUser()
 
-	_, _ = user.With(di.Injecting(dbKey, db, func(u *BenchUserService, d *BenchDB) {
+	_, _ = user.With(di.Injecting(dbKey, db, func(u *di.UserService, d *di.DB) {
 		u.DB = d
 	}))
 
@@ -118,13 +106,13 @@ func BenchmarkGetAs(b *testing.B) {
 	db := newBenchDB()
 	user := newBenchUser()
 
-	_, _ = user.With(di.Injecting(dbKey, db, func(u *BenchUserService, d *BenchDB) {
+	_, _ = user.With(di.Injecting(dbKey, db, func(u *di.UserService, d *di.DB) {
 		u.DB = d
 	}))
 
 	b.ResetTimer()
 	for i := 0; i < b.N; i++ {
-		_, _ = di.GetAs[BenchUserService, BenchDB](user, dbKey)
+		_, _ = di.GetAs[di.UserService, di.DB](user, dbKey)
 	}
 }
 
@@ -132,13 +120,13 @@ func BenchmarkTryGetAs_Success(b *testing.B) {
 	db := newBenchDB()
 	user := newBenchUser()
 
-	_, _ = user.With(di.Injecting(dbKey, db, func(u *BenchUserService, d *BenchDB) {
+	_, _ = user.With(di.Injecting(dbKey, db, func(u *di.UserService, d *di.DB) {
 		u.DB = d
 	}))
 
 	b.ResetTimer()
 	for i := 0; i < b.N; i++ {
-		_, _ = di.TryGetAs[BenchUserService, BenchDB](user, dbKey)
+		_, _ = di.TryGetAs[di.UserService, di.DB](user, dbKey)
 	}
 }
 
@@ -147,7 +135,7 @@ func BenchmarkTryGetAs_Missing(b *testing.B) {
 
 	b.ResetTimer()
 	for i := 0; i < b.N; i++ {
-		_, _ = di.TryGetAs[BenchUserService, BenchDB](user, dbKey)
+		_, _ = di.TryGetAs[di.UserService, di.DB](user, dbKey)
 	}
 }
 
@@ -157,8 +145,8 @@ func BenchmarkClone(b *testing.B) {
 
 	user := newBenchUser()
 	_, _ = user.WithAll(
-		di.Injecting(dbKey, db, func(u *BenchUserService, d *BenchDB) { u.DB = d }),
-		di.Injecting(loggerKey, logger, func(u *BenchUserService, l *BenchLogger) { u.Logger = l }),
+		di.Injecting(dbKey, db, func(u *di.UserService, d *di.DB) { u.DB = d }),
+		di.Injecting(loggerKey, logger, func(u *di.UserService, l *di.Logger) { u.Logger = l }),
 	)
 
 	b.ResetTimer()
@@ -170,18 +158,18 @@ func BenchmarkClone(b *testing.B) {
 func BenchmarkMustGetAs_Success(b *testing.B) {
 	db := newBenchDB()
 	user := newBenchUser()
-	_, _ = user.With(di.Injecting(dbKey, db, func(u *BenchUserService, d *BenchDB) { u.DB = d }))
+	_, _ = user.With(di.Injecting(dbKey, db, func(u *di.UserService, d *di.DB) { u.DB = d }))
 
 	b.ResetTimer()
 	for i := 0; i < b.N; i++ {
-		_ = di.MustGetAs[BenchUserService, BenchDB](user, dbKey)
+		_ = di.MustGetAs[di.UserService, di.DB](user, dbKey)
 	}
 }
 
 func BenchmarkInjecting_DuplicateKey(b *testing.B) {
 	db := newBenchDB()
 	user := newBenchUser()
-	inj := di.Injecting(dbKey, db, func(u *BenchUserService, d *BenchDB) { u.DB = d })
+	inj := di.Injecting(dbKey, db, func(u *di.UserService, d *di.DB) { u.DB = d })
 
 	// first time succeeds
 	_, _ = user.With(inj)
@@ -194,7 +182,7 @@ func BenchmarkInjecting_DuplicateKey(b *testing.B) {
 
 func BenchmarkInjecting_NilTarget(b *testing.B) {
 	db := newBenchDB()
-	inj := di.Injecting(dbKey, db, func(u *BenchUserService, d *BenchDB) { u.DB = d })
+	inj := di.Injecting(dbKey, db, func(u *di.UserService, d *di.DB) { u.DB = d })
 
 	b.ResetTimer()
 	for i := 0; i < b.N; i++ {
@@ -204,7 +192,7 @@ func BenchmarkInjecting_NilTarget(b *testing.B) {
 
 func BenchmarkInjecting_NilDep(b *testing.B) {
 	user := newBenchUser()
-	inj := di.Injecting[BenchUserService, BenchDB](dbKey, nil, func(u *BenchUserService, d *BenchDB) { u.DB = d })
+	inj := di.Injecting[di.UserService, di.DB](dbKey, nil, func(u *di.UserService, d *di.DB) { u.DB = d })
 
 	b.ResetTimer()
 	for i := 0; i < b.N; i++ {
@@ -215,7 +203,7 @@ func BenchmarkInjecting_NilDep(b *testing.B) {
 func BenchmarkInjecting_NilBind(b *testing.B) {
 	db := newBenchDB()
 	user := newBenchUser()
-	inj := di.Injecting[BenchUserService, BenchDB](dbKey, db, nil)
+	inj := di.Injecting[di.UserService, di.DB](dbKey, db, nil)
 
 	b.ResetTimer()
 	for i := 0; i < b.N; i++ {

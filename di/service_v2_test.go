@@ -1,0 +1,99 @@
+package di_test
+
+import (
+	"testing"
+
+	"github.com/stretchr/testify/require"
+
+	"github.com/sghaida/odi/di"
+)
+
+func TestNew_ServiceV2_Table(t *testing.T) {
+	t.Parallel()
+
+	tests := []struct {
+		name string
+		run  func(t *testing.T)
+	}{
+		{
+			name: "New(DB) constructs value",
+			run: func(t *testing.T) {
+				t.Parallel()
+
+				s := di.New(func() *di.DB { return &di.DB{DSN: "postgres://prod"} })
+				require.NotNil(t, s.Val)
+				require.Equal(t, "postgres://prod", s.Val.DSN)
+			},
+		},
+		{
+			name: "New(Logger) constructs value",
+			run: func(t *testing.T) {
+				t.Parallel()
+
+				s := di.New(func() *di.Logger { return &di.Logger{Level: "info"} })
+				require.NotNil(t, s.Val)
+				require.Equal(t, "info", s.Val.Level)
+			},
+		},
+		{
+			name: "New(BasketService) constructs value",
+			run: func(t *testing.T) {
+				t.Parallel()
+
+				s := di.New(func() *di.BasketService { return &di.BasketService{} })
+				require.NotNil(t, s.Val)
+				require.Nil(t, s.Val.DB)
+				require.Nil(t, s.Val.Logger)
+			},
+		},
+		{
+			name: "Manual wiring: BasketService depends on DB + Logger",
+			run: func(t *testing.T) {
+				t.Parallel()
+
+				// Construct deps
+				db := di.New(func() *di.DB { return &di.DB{DSN: "postgres://prod"} })
+				logger := di.New(func() *di.Logger { return &di.Logger{Level: "debug"} })
+
+				// Construct service
+				basket := di.New(func() *di.BasketService { return &di.BasketService{} })
+
+				// V2 "DI": manual pointer wiring
+				basket.Val.DB = db.Val
+				basket.Val.Logger = logger.Val
+
+				// Validate wiring uses the same instances
+				require.Same(t, db.Val, basket.Val.DB)
+				require.Same(t, logger.Val, basket.Val.Logger)
+
+				// Mutations flow through shared pointers (proves it's the same instance)
+				db.Val.DSN = "postgres://changed"
+				require.Equal(t, "postgres://changed", basket.Val.DB.DSN)
+
+				logger.Val.Level = "warn"
+				require.Equal(t, "warn", basket.Val.Logger.Level)
+			},
+		},
+		{
+			name: "Copying ServiceV2 keeps pointer identity",
+			run: func(t *testing.T) {
+				t.Parallel()
+
+				db := di.New(func() *di.DB { return &di.DB{DSN: "sqlite://"} })
+				db2 := db // copy the container
+
+				require.Same(t, db.Val, db2.Val)
+
+				db.Val.DSN = "sqlite://changed"
+				require.Equal(t, "sqlite://changed", db2.Val.DSN)
+			},
+		},
+	}
+
+	for _, tc := range tests {
+		tc := tc
+		t.Run(tc.name, func(t *testing.T) {
+			tc.run(t)
+		})
+	}
+}
