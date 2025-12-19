@@ -8,12 +8,10 @@ linters:
   default: none
   enable:
     - govet
-    - staticcheck
+    - staticcheck   # includes gosimple + unused
     - errcheck
     - revive
     - ineffassign
-    - unused
-    - gosimple
     - bodyclose
 
   settings:
