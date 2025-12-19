@@ -275,6 +275,7 @@ func main() {
 
 	/*
 		12) Demonstrate error types from Injecting()
+
 		Injecting can return:
 		  - ErrNilTarget
 		  - NilDependencyServiceError
