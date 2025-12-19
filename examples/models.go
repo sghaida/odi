@@ -1,4 +1,4 @@
-package main
+package examples
 
 // DB is a fake database handle for the example.
 type DB struct {

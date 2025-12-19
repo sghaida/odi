@@ -1,6 +1,8 @@
-package main
+package examples
 
-import "fmt"
+import (
+	"fmt"
+)
 
 /*
 Interfaces (what we inject)
