@@ -77,8 +77,15 @@ test:
 
 # -------- Coverage --------
 coverage:
-	go test ./... -covermode=atomic -coverpkg=./... -coverprofile=$(COVERPROFILE)
+	@PKGS=$$(go list ./... | grep -vE '/examples/|/mocks/|/mock[^/]*'); \
+	echo "Covering packages:"; \
+	echo "$$PKGS"; \
+	go test $$PKGS \
+	  -covermode=atomic \
+	  -coverpkg=$$(echo $$PKGS | tr ' ' ',') \
+	  -coverprofile=$(COVERPROFILE)
 	@test -s $(COVERPROFILE) || (echo "ERROR: $(COVERPROFILE) is empty"; exit 1)
+
 
 # Install ONLY the coverage converter (gcov2lcov) locally into ./bin (no sudo).
 tools-coverage:
