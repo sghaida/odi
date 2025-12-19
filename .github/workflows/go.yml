@@ -6,29 +6,25 @@ on:
   pull_request:
 
 jobs:
-  coverage:
+  test-and-coverage:
     runs-on: ubuntu-latest
+
     steps:
-      - uses: actions/checkout@v4
+      - name: Checkout
+        uses: actions/checkout@v4
 
-      - uses: actions/setup-go@v5
+      - name: Setup Go
+        uses: actions/setup-go@v5
         with:
-          go-version: "1.23.x"
+          go-version: "1.25.x"
+          cache: true
 
-      - name: Run tests with coverage
-        run: |
-          go test ./... -covermode=atomic -coverpkg=./... -coverprofile=coverage.out
-          test -s coverage.out
+      - name: Run tests + generate LCOV
+        run: make coverage-lcov
 
-      # Convert Go coverprofile -> LCOV
-      - name: Convert coverage to LCOV
-        uses: jandelgado/gcov2lcov-action@v1
-        with:
-          infile: coverage.out
-          outfile: coverage.lcov
-
+      # Upload only when the secret is available (won't run on fork PRs)
       - name: Upload coverage to Codacy
-        uses: codacy/codacy-coverage-reporter-action@v1
-        with:
-          project-token: ${{ secrets.CODACY_PROJECT_TOKEN }}
-          coverage-reports: coverage.lcov
+        if: ${{ secrets.CODACY_PROJECT_TOKEN != '' }}
+        env:
+          CODACY_PROJECT_TOKEN: ${{ secrets.CODACY_PROJECT_TOKEN }}
+        run: make codacy-coverage
