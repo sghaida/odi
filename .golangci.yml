@@ -1,0 +1,28 @@
+run:
+  timeout: 5m
+  tests: true
+
+linters:
+  enable:
+    - govet
+    - staticcheck
+    - errcheck
+    - revive
+    - ineffassign
+    - unused
+    - gosimple
+    - typecheck
+    - bodyclose
+
+linters-settings:
+  revive:
+    rules:
+      - name: var-naming
+      - name: receiver-naming
+      - name: error-return
+      - name: error-strings
+
+issues:
+  exclude-use-default: false
+  max-issues-per-linter: 0
+  max-same-issues: 0
