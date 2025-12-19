@@ -1,4 +1,4 @@
-name: coverage
+name: go
 
 on:
   push:
@@ -19,12 +19,15 @@ jobs:
           go-version: "1.25.x"
           cache: true
 
-      - name: Run tests + generate LCOV
+      - name: Tests + coverage (LCOV) via Makefile
         run: make coverage-lcov
 
-      # Upload only when the secret is available (won't run on fork PRs)
-      - name: Upload coverage to Codacy
-        if: ${{ secrets.CODACY_PROJECT_TOKEN != '' }}
+      - name: Upload coverage to Codacy (skip if token not available)
         env:
           CODACY_PROJECT_TOKEN: ${{ secrets.CODACY_PROJECT_TOKEN }}
-        run: make codacy-coverage
+        run: |
+          if [ -n "${CODACY_PROJECT_TOKEN}" ]; then
+            make codacy-coverage
+          else
+            echo "CODACY_PROJECT_TOKEN not available (likely fork PR). Skipping Codacy upload."
+          fi
