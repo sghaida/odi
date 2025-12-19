@@ -1,4 +1,4 @@
-name: go
+name: ci
 
 on:
   push:
@@ -6,7 +6,7 @@ on:
   pull_request:
 
 jobs:
-  test-and-coverage:
+  ci:
     runs-on: ubuntu-latest
 
     steps:
@@ -16,13 +16,27 @@ jobs:
       - name: Setup Go
         uses: actions/setup-go@v5
         with:
-          go-version: "1.25.x"
+          go-version-file: go.mod
           cache: true
 
-      - name: Tests + coverage (LCOV) via Makefile
+      # 1) Lint (first)
+      - name: Lint (golangci-lint)
+        uses: golangci/golangci-lint-action@v6
+        with:
+          version: v1.61.0
+          args: --timeout=5m
+
+      # 2) Test (second)
+      - name: Test
+        run: make test
+
+      # 3) Coverage (third) -> produces coverage.lcov via Makefile
+      - name: Coverage (LCOV)
         run: make coverage-lcov
 
-      - name: Upload coverage to Codacy (skip if token not available)
+      # 4) Upload coverage to Codacy (fourth)
+      # Note: on fork PRs, secrets aren't available, so this will skip cleanly.
+      - name: Upload coverage to Codacy
         env:
           CODACY_PROJECT_TOKEN: ${{ secrets.CODACY_PROJECT_TOKEN }}
         run: |
