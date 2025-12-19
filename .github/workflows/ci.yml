@@ -19,12 +19,12 @@ jobs:
           go-version-file: go.mod
           cache: true
 
-      # 1) Lint (first)
+      # 1) Lint (first) - golangci-lint v2 via action v7
       - name: Lint (golangci-lint)
-        uses: golangci/golangci-lint-action@v6
+        uses: golangci/golangci-lint-action@v7
         with:
           version: v2.6.1
-          args: --timeout=10m
+          args: --timeout=5m
 
       # 2) Test (second)
       - name: Test
@@ -35,7 +35,6 @@ jobs:
         run: make coverage-lcov
 
       # 4) Upload coverage to Codacy (fourth)
-      # Note: on fork PRs, secrets aren't available, so this will skip cleanly.
       - name: Upload coverage to Codacy
         env:
           CODACY_PROJECT_TOKEN: ${{ secrets.CODACY_PROJECT_TOKEN }}
