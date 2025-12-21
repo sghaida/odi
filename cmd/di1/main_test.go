@@ -18,12 +18,12 @@ import (
 // Fixtures
 // -----------------------------------------------------------------------------
 
-// minimalValidSpecJSON returns a minimal inject spec that passes validateSpec
+// minimalSpecJSON returns a minimal inject spec JSON that passes validateSpec
 // and allows run() to generate output.
 //
-// We include imports.config as a fallback to ensure generation still succeeds
+// It includes imports.config as a fallback so generation can still succeed
 // even when owner-file import discovery fails (by design in some tests).
-func minimalValidSpecJSON() []byte {
+func minimalSpecJSON() []byte {
 	return []byte(`{
   "package": "svc",
   "wrapperBase": "User",
@@ -39,29 +39,33 @@ func minimalValidSpecJSON() []byte {
 
 //
 // -----------------------------------------------------------------------------
-// Helpers
+// Small helpers
 // -----------------------------------------------------------------------------
 
-func ptrBool(v bool) *bool { return &v }
+// boolPtr returns a pointer to v.
+func boolPtr(v bool) *bool { return &v }
 
-// requirePanicContains asserts fn panics and the panic message contains wantSub.
-func requirePanicContains(t *testing.T, wantSub string, fn func()) {
+// intPtr returns a pointer to v.
+func intPtr(v int) *int { return &v }
+
+// mustPanicContains asserts fn panics and the panic message contains wantSub.
+func mustPanicContains(t *testing.T, wantSub string, fn func()) {
 	t.Helper()
 
 	defer func() {
-		recovered := recover()
-		require.NotNil(t, recovered)
+		r := recover()
+		require.NotNil(t, r)
 
-		var message string
-		switch v := recovered.(type) {
+		var msg string
+		switch v := r.(type) {
 		case error:
-			message = v.Error()
+			msg = v.Error()
 		case string:
-			message = v
+			msg = v
 		default:
-			message = fmt.Sprintf("%v", v)
+			msg = fmt.Sprintf("%v", v)
 		}
-		require.Contains(t, message, wantSub)
+		require.Contains(t, msg, wantSub)
 	}()
 
 	fn()
@@ -73,7 +77,7 @@ func requirePanicContains(t *testing.T, wantSub string, fn func()) {
 // -----------------------------------------------------------------------------
 
 // fakeTempFile is a controllable file-like object for writeFileAtomic tests.
-// It lets us force errors on Write and Close without using a real file.
+// It lets tests force errors on Write and Close without touching real files.
 type fakeTempFile struct {
 	fileName string
 	writeErr error
@@ -89,13 +93,11 @@ func (f *fakeTempFile) Write(p []byte) (int, error) {
 	return len(p), nil
 }
 
-func (f *fakeTempFile) Close() error {
-	return f.closeErr
-}
+func (f *fakeTempFile) Close() error { return f.closeErr }
 
-// snapshotWriteFileSeams captures the current global file seams so tests can restore them.
+// snapWriteSeams captures the current global file seams so tests can restore them.
 // writeFileAtomic uses these seams for testability.
-func snapshotWriteFileSeams(t *testing.T) (
+func snapWriteSeams(t *testing.T) (
 	origCreate func(string, string) (tempFile, error),
 	origRemove func(string) error,
 	origChmod func(string, os.FileMode) error,
@@ -105,9 +107,9 @@ func snapshotWriteFileSeams(t *testing.T) (
 	return createTempFile, removeFile, chmodFile, renameFile
 }
 
-// setWriteFileSeams overrides the global seams used by writeFileAtomic.
+// setWriteSeams overrides the global seams used by writeFileAtomic.
 // Pass nil for any seam you don't want to override.
-func setWriteFileSeams(
+func setWriteSeams(
 	t *testing.T,
 	createFn func(string, string) (tempFile, error),
 	removeFn func(path string) error,
@@ -135,8 +137,7 @@ func setWriteFileSeams(
 // must()
 // -----------------------------------------------------------------------------
 
-// Covers:
-// func must(err error) { if err != nil { panic(err) } }
+// TestMust_PanicsOnError covers must() for nil and non-nil errors.
 func TestMust_PanicsOnError(t *testing.T) {
 	t.Parallel()
 
@@ -149,41 +150,42 @@ func TestMust_PanicsOnError(t *testing.T) {
 // writeFileAtomic()
 // -----------------------------------------------------------------------------
 
-// Covers every writeFileAtomic error branch, including deferred cleanup:
+// TestWriteFileAtomic_ErrorBranches covers every writeFileAtomic error branch,
+// including deferred cleanup:
 // - createTempFile failure
 // - Write failure triggers Close + deferred remove
 // - Close failure triggers deferred remove
 // - chmod failure triggers deferred remove
 // - rename failure triggers deferred remove
-func TestWriteFileAtomic_AllErrorBranches(t *testing.T) {
+func TestWriteFileAtomic_ErrorBranches(t *testing.T) {
 	// NOT parallel: mutates global seams.
 
-	type seamOverrides struct {
+	type seams struct {
 		createTemp func(dir, pattern string) (tempFile, error)
 		removeTmp  func(path string) error
 		chmodTmp   func(path string, mode os.FileMode) error
 		renameTmp  func(oldpath, newpath string) error
 	}
 
-	testCases := []struct {
-		name                 string
-		seams                seamOverrides
-		expectedErrSubstring string
-		expectedRemoveCount  int
+	tests := []struct {
+		name        string
+		seams       seams
+		wantErrSub  string
+		wantRemoves int
 	}{
 		{
 			name: "create temp error",
-			seams: seamOverrides{
+			seams: seams{
 				createTemp: func(dir, pattern string) (tempFile, error) {
 					return nil, errors.New("create temp failed")
 				},
 			},
-			expectedErrSubstring: "create temp failed",
-			expectedRemoveCount:  0,
+			wantErrSub:  "create temp failed",
+			wantRemoves: 0,
 		},
 		{
-			name: "write error closes and removes temp via deferred cleanup",
-			seams: seamOverrides{
+			name: "write error removes temp via deferred cleanup",
+			seams: seams{
 				createTemp: func(dir, pattern string) (tempFile, error) {
 					return &fakeTempFile{
 						fileName: filepath.Join(dir, "tmpfile"),
@@ -192,12 +194,12 @@ func TestWriteFileAtomic_AllErrorBranches(t *testing.T) {
 				},
 				removeTmp: func(path string) error { return nil },
 			},
-			expectedErrSubstring: "write failed",
-			expectedRemoveCount:  1,
+			wantErrSub:  "write failed",
+			wantRemoves: 1,
 		},
 		{
 			name: "close error removes temp via deferred cleanup",
-			seams: seamOverrides{
+			seams: seams{
 				createTemp: func(dir, pattern string) (tempFile, error) {
 					return &fakeTempFile{
 						fileName: filepath.Join(dir, "tmpfile"),
@@ -206,24 +208,24 @@ func TestWriteFileAtomic_AllErrorBranches(t *testing.T) {
 				},
 				removeTmp: func(path string) error { return nil },
 			},
-			expectedErrSubstring: "close failed",
-			expectedRemoveCount:  1,
+			wantErrSub:  "close failed",
+			wantRemoves: 1,
 		},
 		{
 			name: "chmod error removes temp via deferred cleanup",
-			seams: seamOverrides{
+			seams: seams{
 				createTemp: func(dir, pattern string) (tempFile, error) {
 					return &fakeTempFile{fileName: filepath.Join(dir, "tmpfile")}, nil
 				},
 				chmodTmp:  func(path string, mode os.FileMode) error { return errors.New("chmod failed") },
 				removeTmp: func(path string) error { return nil },
 			},
-			expectedErrSubstring: "chmod failed",
-			expectedRemoveCount:  1,
+			wantErrSub:  "chmod failed",
+			wantRemoves: 1,
 		},
 		{
 			name: "rename error removes temp via deferred cleanup",
-			seams: seamOverrides{
+			seams: seams{
 				createTemp: func(dir, pattern string) (tempFile, error) {
 					return &fakeTempFile{fileName: filepath.Join(dir, "tmpfile")}, nil
 				},
@@ -231,29 +233,29 @@ func TestWriteFileAtomic_AllErrorBranches(t *testing.T) {
 				renameTmp: func(oldpath, newpath string) error { return errors.New("rename failed") },
 				removeTmp: func(path string) error { return nil },
 			},
-			expectedErrSubstring: "rename failed",
-			expectedRemoveCount:  1,
+			wantErrSub:  "rename failed",
+			wantRemoves: 1,
 		},
 	}
 
-	for _, tc := range testCases {
+	for _, tc := range tests {
 		tc := tc
 		t.Run(tc.name, func(t *testing.T) {
-			originalCreate, originalRemove, originalChmod, originalRename := snapshotWriteFileSeams(t)
+			origCreate, origRemove, origChmod, origRename := snapWriteSeams(t)
 			t.Cleanup(func() {
-				createTempFile = originalCreate
-				removeFile = originalRemove
-				chmodFile = originalChmod
-				renameFile = originalRename
+				createTempFile = origCreate
+				removeFile = origRemove
+				chmodFile = origChmod
+				renameFile = origRename
 			})
 
-			var removedTempPaths []string
+			var removed []string
 
-			setWriteFileSeams(
+			setWriteSeams(
 				t,
 				tc.seams.createTemp,
 				func(path string) error {
-					removedTempPaths = append(removedTempPaths, path)
+					removed = append(removed, path)
 					if tc.seams.removeTmp != nil {
 						return tc.seams.removeTmp(path)
 					}
@@ -275,28 +277,23 @@ func TestWriteFileAtomic_AllErrorBranches(t *testing.T) {
 
 			err := writeFileAtomic(filepath.Join(t.TempDir(), "out.go"), []byte("x"), 0o644)
 			require.Error(t, err)
-			assert.Contains(t, err.Error(), tc.expectedErrSubstring)
-			assert.Len(t, removedTempPaths, tc.expectedRemoveCount)
+			assert.Contains(t, err.Error(), tc.wantErrSub)
+			assert.Len(t, removed, tc.wantRemoves)
 		})
 	}
 }
 
-// Covers the success path of writeFileAtomic:
-// - createTempFile ok
-// - Write ok
-// - Close ok
-// - chmod ok
-// - rename ok
+// TestWriteFileAtomic_Success covers the success path of writeFileAtomic.
 func TestWriteFileAtomic_Success(t *testing.T) {
 	// NOT parallel: uses real filesystem but does not mutate seams.
 	tempDir := t.TempDir()
-	outputPath := filepath.Join(tempDir, "final.go")
+	out := filepath.Join(tempDir, "final.go")
 
-	require.NoError(t, writeFileAtomic(outputPath, []byte("hello"), 0o644))
+	require.NoError(t, writeFileAtomic(out, []byte("hello"), 0o644))
 
-	contents, err := os.ReadFile(outputPath)
+	b, err := os.ReadFile(out)
 	require.NoError(t, err)
-	assert.Equal(t, "hello", string(contents))
+	assert.Equal(t, "hello", string(b))
 }
 
 //
@@ -304,16 +301,16 @@ func TestWriteFileAtomic_Success(t *testing.T) {
 // validateSpec()
 // -----------------------------------------------------------------------------
 
-// Covers validateSpec behavior including:
+// TestValidateSpec_Branches covers validateSpec behavior including:
 // - missing required fields collection
 // - required deps empty
 // - dep validation (missing name/field/type)
 // - duplicates across required + optional
 // - optional deps loop
-func TestValidateSpec_AllBranches(t *testing.T) {
+func TestValidateSpec_Branches(t *testing.T) {
 	t.Parallel()
 
-	baseSpec := func() Spec {
+	base := func() Spec {
 		return Spec{
 			Package:       "svc",
 			WrapperBase:   "User",
@@ -329,15 +326,15 @@ func TestValidateSpec_AllBranches(t *testing.T) {
 		}
 	}
 
-	testCases := []struct {
-		name        string
-		mutate      func(s *Spec)
-		expectPanic bool
+	tests := []struct {
+		name      string
+		mutate    func(*Spec)
+		wantPanic bool
 	}{
 		{
-			name:        "ok does not panic (includes optional deps loop)",
-			mutate:      func(s *Spec) {},
-			expectPanic: false,
+			name:      "ok",
+			mutate:    func(*Spec) {},
+			wantPanic: false,
 		},
 		{
 			name: "missing required fields collected",
@@ -346,38 +343,38 @@ func TestValidateSpec_AllBranches(t *testing.T) {
 				s.Constructor = " "
 				s.Required = nil
 			},
-			expectPanic: true,
+			wantPanic: true,
 		},
 		{
-			name: "dep missing field triggers panic",
+			name: "dep missing field panics",
 			mutate: func(s *Spec) {
 				s.Required = []Dep{{Name: "DB", Field: "", Type: "*sql.DB"}}
 			},
-			expectPanic: true,
+			wantPanic: true,
 		},
 		{
-			name: "duplicate dep name across required+optional triggers panic",
+			name: "duplicate dep name across required+optional panics",
 			mutate: func(s *Spec) {
 				s.Optional = []Dep{{Name: "DB", Field: "db2", Type: "*sql.DB"}}
 			},
-			expectPanic: true,
+			wantPanic: true,
 		},
 		{
-			name: "duplicate dep field across required+optional triggers panic",
+			name: "duplicate dep field across required+optional panics",
 			mutate: func(s *Spec) {
 				s.Optional = []Dep{{Name: "Cache", Field: "db", Type: "any"}}
 			},
-			expectPanic: true,
+			wantPanic: true,
 		},
 	}
 
-	for _, tc := range testCases {
+	for _, tc := range tests {
 		tc := tc
 		t.Run(tc.name, func(t *testing.T) {
-			spec := baseSpec()
+			spec := base()
 			tc.mutate(&spec)
 
-			if tc.expectPanic {
+			if tc.wantPanic {
 				require.Panics(t, func() { validateSpec(&spec) })
 				return
 			}
@@ -391,22 +388,20 @@ func TestValidateSpec_AllBranches(t *testing.T) {
 // readImportsFromFile / ensureImport / containsAlias / containsPath
 // -----------------------------------------------------------------------------
 
-// Covers:
-// - parser.ParseFile error path
-// - parsing imports incl. aliases
-func TestReadImportsFromFile_SuccessAndParseError(t *testing.T) {
+// TestReadImportsFromFile covers readImportsFromFile parse error and success paths.
+func TestReadImportsFromFile(t *testing.T) {
 	t.Parallel()
 
-	testCases := []struct {
-		name          string
-		source        string
-		expectErr     bool
-		assertImports func(t *testing.T, imports []ImportSpec)
+	tests := []struct {
+		name      string
+		source    string
+		wantErr   bool
+		check     func(t *testing.T, imports []ImportSpec)
 	}{
 		{
-			name:      "parse error returned",
-			source:    "package", // invalid
-			expectErr: true,
+			name:    "parse error",
+			source:  "package", // invalid
+			wantErr: true,
 		},
 		{
 			name: "parses imports and aliases",
@@ -418,8 +413,8 @@ import (
 	_ "net/http"
 )
 `,
-			expectErr: false,
-			assertImports: func(t *testing.T, imports []ImportSpec) {
+			wantErr: false,
+			check: func(t *testing.T, imports []ImportSpec) {
 				assert.True(t, containsPath(imports, "fmt"))
 				assert.True(t, containsPath(imports, "example.com/project/autowire/config"))
 				assert.True(t, containsAlias(imports, "config"))
@@ -428,57 +423,53 @@ import (
 		},
 	}
 
-	for _, tc := range testCases {
+	for _, tc := range tests {
 		tc := tc
 		t.Run(tc.name, func(t *testing.T) {
-			tempDir := t.TempDir()
-			goFilePath := filepath.Join(tempDir, "file.go")
-			require.NoError(t, os.WriteFile(goFilePath, []byte(tc.source), 0o644))
+			dir := t.TempDir()
+			p := filepath.Join(dir, "file.go")
+			require.NoError(t, os.WriteFile(p, []byte(tc.source), 0o644))
 
-			imports, err := readImportsFromFile(goFilePath)
-			if tc.expectErr {
+			imps, err := readImportsFromFile(p)
+			if tc.wantErr {
 				require.Error(t, err)
 				return
 			}
-
 			require.NoError(t, err)
-			if tc.assertImports != nil {
-				tc.assertImports(t, imports)
+			if tc.check != nil {
+				tc.check(t, imps)
 			}
 		})
 	}
 }
 
-// Covers:
-// - ensureImport early return when path already exists
-func TestEnsureImport_DoesNotDuplicateByPath(t *testing.T) {
+// TestEnsureImport_NoDupByPath covers ensureImport no-op when path already exists.
+func TestEnsureImport_NoDupByPath(t *testing.T) {
 	t.Parallel()
 
-	var imports []ImportSpec
-	ensureImport(&imports, ImportSpec{Path: "fmt"})
-	ensureImport(&imports, ImportSpec{Path: "fmt"}) // should no-op
+	var imps []ImportSpec
+	ensureImport(&imps, ImportSpec{Path: "fmt"})
+	ensureImport(&imps, ImportSpec{Path: "fmt"}) // no-op
 
-	require.Len(t, imports, 1)
-	assert.Equal(t, "fmt", imports[0].Path)
+	require.Len(t, imps, 1)
+	assert.Equal(t, "fmt", imps[0].Path)
 }
 
-// Covers:
-// - containsAlias requires alias != ""
-// - containsPath match/no-match
-func TestContainsAliasAndContainsPath_Branches(t *testing.T) {
+// TestContainsAliasPath covers containsAlias/containsPath match/no-match behavior.
+func TestContainsAliasPath(t *testing.T) {
 	t.Parallel()
 
-	imports := []ImportSpec{
+	imps := []ImportSpec{
 		{Alias: "", Path: "fmt"},
 		{Alias: "config", Path: "example.com/project/autowire/config"},
 	}
 
-	assert.True(t, containsPath(imports, "fmt"))
-	assert.False(t, containsPath(imports, "nope"))
+	assert.True(t, containsPath(imps, "fmt"))
+	assert.False(t, containsPath(imps, "nope"))
 
-	assert.True(t, containsAlias(imports, "config"))
-	assert.False(t, containsAlias(imports, ""))        // alias must be non-empty
-	assert.False(t, containsAlias(imports, "missing")) // absent
+	assert.True(t, containsAlias(imps, "config"))
+	assert.False(t, containsAlias(imps, ""))        // alias must be non-empty
+	assert.False(t, containsAlias(imps, "missing")) // absent
 }
 
 //
@@ -486,66 +477,68 @@ func TestContainsAliasAndContainsPath_Branches(t *testing.T) {
 // resolveImports()
 // -----------------------------------------------------------------------------
 
-// Covers resolveImports branches:
+// TestResolveImports_Branches covers resolveImports branches:
 // - owner imports parse error fallback to empty
 // - !constructorNeedsConfig early return
 // - containsAlias("config") early return
 // - missing spec.Imports.Config error
-// - (updated behavior) config path imported without explicit alias is OK when default ident is 'config'
-func TestResolveImports_AllBranches(t *testing.T) {
+// - config path imported without explicit alias is OK when default ident is 'config'
+func TestResolveImports_Branches(t *testing.T) {
 	t.Parallel()
 
-	testCases := []struct {
-		name          string
-		setup         func(t *testing.T) (ownerFilePath string, spec *Spec, constructorNeedsConfig bool)
-		expectErrSub  string
-		assertImports func(t *testing.T, imports []ImportSpec)
+	tests := []struct {
+		name       string
+		setup      func(t *testing.T) (ownerFile string, spec *Spec, needsConfig bool)
+		wantErrSub string
+		check      func(t *testing.T, imports []ImportSpec)
 	}{
 		{
-			name: "owner import parse error falls back to empty and uses spec config import",
+			name: "owner parse error falls back; uses spec config import",
 			setup: func(t *testing.T) (string, *Spec, bool) {
-				tempDir := t.TempDir()
-				ownerFile := filepath.Join(tempDir, "bad.go")
-				require.NoError(t, os.WriteFile(ownerFile, []byte("package"), 0o644))
-				return ownerFile, &Spec{
+				dir := t.TempDir()
+				owner := filepath.Join(dir, "bad.go")
+				require.NoError(t, os.WriteFile(owner, []byte("package"), 0o644)) // invalid
+
+				return owner, &Spec{
 					Constructor: "NewService",
 					Imports:     Imports{Config: "example.com/project/autowire/config"},
 				}, true
 			},
-			assertImports: func(t *testing.T, imports []ImportSpec) {
+			check: func(t *testing.T, imports []ImportSpec) {
 				assert.True(t, containsPath(imports, "fmt"))
 				assert.True(t, containsAlias(imports, "config"))
 				assert.True(t, containsPath(imports, "example.com/project/autowire/config"))
 			},
 		},
 		{
-			name: "constructor does not need config returns early with fmt ensured",
+			name: "does not need config returns early (fmt ensured)",
 			setup: func(t *testing.T) (string, *Spec, bool) {
 				return "", &Spec{}, false
 			},
-			assertImports: func(t *testing.T, imports []ImportSpec) {
+			check: func(t *testing.T, imports []ImportSpec) {
 				assert.True(t, containsPath(imports, "fmt"))
 				assert.False(t, containsAlias(imports, "config"))
 			},
 		},
 		{
-			name: "owner already has alias config returns early without using spec config path",
+			name: "owner already has alias config returns early",
 			setup: func(t *testing.T) (string, *Spec, bool) {
-				tempDir := t.TempDir()
-				ownerFile := filepath.Join(tempDir, "owner.go")
-				source := `package svc
+				dir := t.TempDir()
+				owner := filepath.Join(dir, "owner.go")
+				src := `package svc
 
 import (
 	config "example.com/owner/config"
 )
 `
-				require.NoError(t, os.WriteFile(ownerFile, []byte(source), 0o644))
-				return ownerFile, &Spec{
+				require.NoError(t, os.WriteFile(owner, []byte(src), 0o644))
+
+				return owner, &Spec{
 					Constructor: "NewService",
 					Imports:     Imports{Config: "example.com/spec/config"},
 				}, true
 			},
-			assertImports: func(t *testing.T, imports []ImportSpec) {
+			check: func(t *testing.T, imports []ImportSpec) {
 				assert.True(t, containsAlias(imports, "config"))
 				assert.True(t, containsPath(imports, "example.com/owner/config"))
 				assert.True(t, containsPath(imports, "fmt"))
@@ -560,49 +553,48 @@ import (
 					Imports:     Imports{Config: ""},
 				}, true
 			},
-			expectErrSub: "spec.imports.config is empty",
+			wantErrSub: "spec.imports.config is empty",
 		},
 		{
-			name: "config path already imported without explicit alias is ok when default ident is 'config'",
+			name: "config path already imported without alias is ok",
 			setup: func(t *testing.T) (string, *Spec, bool) {
-				tempDir := t.TempDir()
-				ownerFile := filepath.Join(tempDir, "owner.go")
-				source := `package svc
+				dir := t.TempDir()
+				owner := filepath.Join(dir, "owner.go")
+				src := `package svc
 
 import (
 	"example.com/project/autowire/config"
 )
 `
-				require.NoError(t, os.WriteFile(ownerFile, []byte(source), 0o644))
+				require.NoError(t, os.WriteFile(owner, []byte(src), 0o644))
 
-				return ownerFile, &Spec{
+				return owner, &Spec{
 					Constructor: "NewService",
 					Imports:     Imports{Config: "example.com/project/autowire/config"},
 				}, true
 			},
-			expectErrSub: "",
-			assertImports: func(t *testing.T, imports []ImportSpec) {
+			check: func(t *testing.T, imports []ImportSpec) {
 				assert.True(t, containsPath(imports, "fmt"))
 				assert.True(t, containsPath(imports, "example.com/project/autowire/config"))
 			},
 		},
 	}
 
-	for _, tc := range testCases {
+	for _, tc := range tests {
 		tc := tc
 		t.Run(tc.name, func(t *testing.T) {
-			ownerFilePath, spec, constructorNeedsConfig := tc.setup(t)
+			owner, spec, needs := tc.setup(t)
 
-			imports, err := resolveImports(ownerFilePath, spec, constructorNeedsConfig)
-			if tc.expectErrSub != "" {
+			imps, err := resolveImports(owner, spec, needs)
+			if tc.wantErrSub != "" {
 				require.Error(t, err)
-				assert.Contains(t, err.Error(), tc.expectErrSub)
+				assert.Contains(t, err.Error(), tc.wantErrSub)
 				return
 			}
 
 			require.NoError(t, err)
-			if tc.assertImports != nil {
-				tc.assertImports(t, imports)
+			if tc.check != nil {
+				tc.check(t, imps)
 			}
 		})
 	}
@@ -613,7 +605,7 @@ import (
 // determineConstructorNeedsConfig()
 // -----------------------------------------------------------------------------
 
-// Covers determineConstructorNeedsConfig branches:
+// TestCtorNeedsConfig covers determineConstructorNeedsConfig branches:
 // - explicit override (nil vs non-nil)
 // - ReadDir error default true
 // - entry.IsDir() skip
@@ -626,113 +618,105 @@ import (
 // - selector matches config.Config => true
 // - selector is Ident but not "config" => unrecognized signature => true
 // - constructor not found => default true
-func TestDetermineConstructorNeedsConfig_AllBranches(t *testing.T) {
+func TestCtorNeedsConfig(t *testing.T) {
 	t.Parallel()
 
-	testCases := []struct {
-		name              string
-		override          *bool
-		files             map[string]string
-		expectNeedsConfig bool
-		useMissingDir     bool
+	tests := []struct {
+		name      string
+		override  *bool
+		files     map[string]string
+		want      bool
+		missing   bool
 	}{
 		{
-			name:              "explicit override wins (true)",
-			override:          ptrBool(true),
-			files:             map[string]string{},
-			expectNeedsConfig: true,
+			name:     "override true",
+			override: boolPtr(true),
+			want:     true,
 		},
 		{
-			name:              "explicit override wins (false)",
-			override:          ptrBool(false),
-			files:             map[string]string{},
-			expectNeedsConfig: false,
+			name:     "override false",
+			override: boolPtr(false),
+			want:     false,
 		},
 		{
-			name:              "ReadDir error defaults true",
-			override:          nil,
-			useMissingDir:     true,
-			expectNeedsConfig: true,
+			name:    "ReadDir error defaults true",
+			missing: true,
+			want:    true,
 		},
 		{
-			name:     "skips dirs/parse errors/non-func/method/name mismatch and detects config.Config",
-			override: nil,
+			name: "skips misc decls and finds config.Config",
 			files: map[string]string{
 				"bad.go": "package", // parse error -> skipped
 				"svc.go": `package svc
 
-var x = 1 // non-func decl ensures funcDecl type assertion fails for at least one decl
+var x = 1
 
 type T struct{}
-func (t *T) NewService() {} // method: should be skipped
-func Other() {}            // name mismatch: skipped
+func (t *T) NewService() {}
+func Other() {}
 
-func NewService(cfg config.Config) {} // target constructor with config.Config
+func NewService(cfg config.Config) {}
 `,
 			},
-			expectNeedsConfig: true,
+			want: true,
 		},
 		{
-			name:     "constructor with no params returns false",
-			override: nil,
+			name: "no params => false",
 			files: map[string]string{
 				"svc.go": `package svc
 func NewService() {}
 `,
 			},
-			expectNeedsConfig: false,
+			want: false,
 		},
 		{
-			name:     "constructor with one param but not selector defaults true",
-			override: nil,
+			name: "one param but not selector => true",
 			files: map[string]string{
 				"svc.go": `package svc
 func NewService(x int) {}
 `,
 			},
-			expectNeedsConfig: true,
+			want: true,
 		},
 		{
-			name:     "selector ident but not 'config' defaults true (other.Config)",
-			override: nil,
+			name: "other.Config => true",
 			files: map[string]string{
 				"svc.go": `package svc
 func NewService(cfg other.Config) {}
 `,
 			},
-			expectNeedsConfig: true,
+			want: true,
 		},
 		{
-			name:     "constructor not found defaults true",
-			override: nil,
+			name: "constructor not found => true",
 			files: map[string]string{
 				"svc.go": "package svc\n",
 			},
-			expectNeedsConfig: true,
+			want: true,
 		},
 	}
 
-	for _, tc := range testCases {
+	for _, tc := range tests {
 		tc := tc
 		t.Run(tc.name, func(t *testing.T) {
-			constructorSpec := &Spec{Constructor: "NewService", ConstructorTakesConfig: tc.override}
+			spec := &Spec{Constructor: "NewService", ConstructorTakesConfig: tc.override}
 
-			if tc.useMissingDir {
-				missingDir := filepath.Join(t.TempDir(), "does-not-exist")
-				assert.Equal(t, tc.expectNeedsConfig, determineConstructorNeedsConfig(constructorSpec, missingDir))
+			if tc.missing {
+				dir := filepath.Join(t.TempDir(), "does-not-exist")
+				assert.Equal(t, tc.want, determineConstructorNeedsConfig(spec, dir))
 				return
 			}
 
-			sourceDir := t.TempDir()
+			dir := t.TempDir()
 
-			// Create a directory entry to cover entry.IsDir() skip behavior.
-			require.NoError(t, os.Mkdir(filepath.Join(sourceDir, "subdir"), 0o755))
+			// covers entry.IsDir() skip
+			require.NoError(t, os.Mkdir(filepath.Join(dir, "subdir"), 0o755))
 
-			for fileName, contents := range tc.files {
-				require.NoError(t, os.WriteFile(filepath.Join(sourceDir, fileName), []byte(contents), 0o644))
+			for name, src := range tc.files {
+				require.NoError(t, os.WriteFile(filepath.Join(dir, name), []byte(src), 0o644))
 			}
 
-			assert.Equal(t, tc.expectNeedsConfig, determineConstructorNeedsConfig(constructorSpec, sourceDir))
+			assert.Equal(t, tc.want, determineConstructorNeedsConfig(spec, dir))
 		})
 	}
 }
@@ -742,92 +726,88 @@ func NewService(cfg other.Config) {}
 // findOwnerGoGenerateFile()
 // -----------------------------------------------------------------------------
 
-// Covers findOwnerGoGenerateFile branches:
+// TestFindOwnerFile covers findOwnerGoGenerateFile branches:
 // - os.ReadDir error
 // - entry.IsDir() skip
 // - suffix filters for non-go and _test.go
 // - os.ReadFile error skip
 // - match found
 // - no match found
-func TestFindOwnerGoGenerateFile_AllBranches(t *testing.T) {
-	// NOT parallel: uses symlink (may skip).
+func TestFindOwnerFile(t *testing.T) {
+	// NOT parallel: uses symlink (may be skipped).
 
-	testCases := []struct {
-		name               string
-		setup              func(t *testing.T) (packageDir string)
-		expectErr          bool
-		expectPathEndsWith string
+	tests := []struct {
+		name     string
+		setup    func(t *testing.T) string
+		wantErr  bool
+		wantSfx  string
 	}{
 		{
-			name: "ReadDir error returned",
+			name: "ReadDir error",
 			setup: func(t *testing.T) string {
 				return filepath.Join(t.TempDir(), "does-not-exist")
 			},
-			expectErr: true,
+			wantErr: true,
 		},
 		{
-			name: "skips dir + suffix filters + readfile error and finds matching owner file",
+			name: "skips junk and finds owner",
 			setup: func(t *testing.T) string {
-				packageDir := t.TempDir()
+				dir := t.TempDir()
 
-				// entry.IsDir() skip
-				require.NoError(t, os.Mkdir(filepath.Join(packageDir, "00_dir"), 0o755))
+				// IsDir skip
+				require.NoError(t, os.Mkdir(filepath.Join(dir, "00_dir"), 0o755))
 
 				// suffix filters
-				require.NoError(t, os.WriteFile(filepath.Join(packageDir, "01_readme.md"), []byte("ignore"), 0o644))
-				require.NoError(t, os.WriteFile(filepath.Join(packageDir, "02_owner_test.go"), []byte("package svc\n"), 0o644))
+				require.NoError(t, os.WriteFile(filepath.Join(dir, "01_readme.md"), []byte("ignore"), 0o644))
+				require.NoError(t, os.WriteFile(filepath.Join(dir, "02_owner_test.go"), []byte("package svc\n"), 0o644))
 
-				// os.ReadFile error skip: broken symlink with .go suffix
-				brokenSymlinkPath := filepath.Join(packageDir, "03_broken.go")
-				symlinkErr := os.Symlink(filepath.Join(packageDir, "does-not-exist-target"), brokenSymlinkPath)
-				if symlinkErr != nil {
-					// Some environments disallow symlinks; fall back to chmod-based unreadable file.
-					unreadableGo := filepath.Join(packageDir, "03_unreadable.go")
-					require.NoError(t, os.WriteFile(unreadableGo, []byte("package svc\n"), 0o644))
-					require.NoError(t, os.Chmod(unreadableGo, 0o000))
-					t.Cleanup(func() { _ = os.Chmod(unreadableGo, 0o644) })
+				// ReadFile error skip
+				broken := filepath.Join(dir, "03_broken.go")
+				if err := os.Symlink(filepath.Join(dir, "does-not-exist-target"), broken); err != nil {
+					unreadable := filepath.Join(dir, "03_unreadable.go")
+					require.NoError(t, os.WriteFile(unreadable, []byte("package svc\n"), 0o644))
+					require.NoError(t, os.Chmod(unreadable, 0o000))
+					t.Cleanup(func() { _ = os.Chmod(unreadable, 0o644) })
 				}
 
 				// Non-matching go file
-				require.NoError(t, os.WriteFile(filepath.Join(packageDir, "04_other.go"), []byte("package svc\n"), 0o644))
+				require.NoError(t, os.WriteFile(filepath.Join(dir, "04_other.go"), []byte("package svc\n"), 0o644))
 
 				// Matching owner file (sorted last)
-				ownerPath := filepath.Join(packageDir, "zz_owner.go")
-				ownerSource := `package svc
+				owner := filepath.Join(dir, "zz_owner.go")
+				src := `package svc
 
 //go:generate go run ../../cmd/di1 -spec ./specs/x.inject.json -out ./x.gen.go
 `
-				require.NoError(t, os.WriteFile(ownerPath, []byte(ownerSource), 0o644))
-
-				return packageDir
+				require.NoError(t, os.WriteFile(owner, []byte(src), 0o644))
+				return dir
 			},
-			expectErr:          false,
-			expectPathEndsWith: "zz_owner.go",
+			wantErr: false,
+			wantSfx: "zz_owner.go",
 		},
 		{
-			name: "no matching file returns error",
+			name: "no match",
 			setup: func(t *testing.T) string {
-				packageDir := t.TempDir()
-				require.NoError(t, os.WriteFile(filepath.Join(packageDir, "a.go"), []byte("package svc\n"), 0o644))
-				return packageDir
+				dir := t.TempDir()
+				require.NoError(t, os.WriteFile(filepath.Join(dir, "a.go"), []byte("package svc\n"), 0o644))
+				return dir
 			},
-			expectErr: true,
+			wantErr: true,
 		},
 	}
 
-	for _, tc := range testCases {
+	for _, tc := range tests {
 		tc := tc
 		t.Run(tc.name, func(t *testing.T) {
-			packageDir := tc.setup(t)
+			dir := tc.setup(t)
 
-			foundOwnerPath, err := findOwnerGoGenerateFile(packageDir)
-			if tc.expectErr {
+			found, err := findOwnerGoGenerateFile(dir)
+			if tc.wantErr {
 				require.Error(t, err)
 				return
 			}
-
 			require.NoError(t, err)
-			assert.True(t, strings.HasSuffix(foundOwnerPath, tc.expectPathEndsWith))
+			assert.True(t, strings.HasSuffix(found, tc.wantSfx))
 		})
 	}
 }
@@ -837,9 +817,8 @@ func TestFindOwnerGoGenerateFile_AllBranches(t *testing.T) {
 // Template rendering (smoke)
 // -----------------------------------------------------------------------------
 
-// A quick sanity check that the template still renders expected output with templateData.
-// This is not exhaustive; run() tests already validate generated output too.
-func TestGenTemplate_Smoke(t *testing.T) {
+// TestTemplateSmoke ensures the template renders expected output from templateData.
+func TestTemplateSmoke(t *testing.T) {
 	t.Parallel()
 
 	spec := Spec{
@@ -865,10 +844,10 @@ func TestGenTemplate_Smoke(t *testing.T) {
 		},
 	}
 
-	var rendered strings.Builder
-	require.NoError(t, genTemplate.Execute(&rendered, data))
+	var b strings.Builder
+	require.NoError(t, genTemplate.Execute(&b, data))
 
-	out := rendered.String()
+	out := b.String()
 	assert.Contains(t, out, "type UserV1 struct")
 	assert.Contains(t, out, "func NewUserV1")
 	assert.Contains(t, out, "InjectDB")
@@ -879,81 +858,86 @@ func TestGenTemplate_Smoke(t *testing.T) {
 // run(): relative out path cleaning
 // -----------------------------------------------------------------------------
 
-// NOT parallel:
-// - uses run() which calls writeFileAtomic (global seams)
-// - mutates working directory (process-global state)
-func TestRun_RelativeOutPath_IsCleaned(t *testing.T) {
-	tempDir := t.TempDir()
+// TestRun_CleansRelativeOutPath verifies run() cleans a relative -out path.
+func TestRun_CleansRelativeOutPath(t *testing.T) {
+	// NOT parallel:
+	// - uses run() which calls writeFileAtomic
+	// - changes process CWD
+
+	tmp := t.TempDir()
 
 	oldWD, err := os.Getwd()
 	require.NoError(t, err)
 	t.Cleanup(func() { _ = os.Chdir(oldWD) })
 
-	require.NoError(t, os.Chdir(tempDir))
+	require.NoError(t, os.Chdir(tmp))
 
-	specPath := filepath.Join(tempDir, "service.inject.json")
-	require.NoError(t, os.WriteFile(specPath, minimalValidSpecJSON(), 0o644))
+	specPath := filepath.Join(tmp, "service.inject.json")
+	require.NoError(t, os.WriteFile(specPath, minimalSpecJSON(), 0o644))
 
-	relativeOutputPath := filepath.Join(".", "subdir", "..", "gen", "out.gen.go")
-	cleanedOutputPath := filepath.Clean(relativeOutputPath)
+	relOut := filepath.Join(".", "subdir", "..", "gen", "out.gen.go")
+	cleanOut := filepath.Clean(relOut)
 
-	require.NoError(t, os.MkdirAll(filepath.Dir(cleanedOutputPath), 0o755))
+	require.NoError(t, os.MkdirAll(filepath.Dir(cleanOut), 0o755))
 
 	var stderr bytes.Buffer
-	exitCode := run([]string{"-spec", specPath, "-out", relativeOutputPath}, &stderr)
-	require.Equal(t, 0, exitCode)
+	code := run([]string{"-spec", specPath, "-out", relOut}, &stderr)
+	require.Equal(t, 0, code)
 
-	contents, err := os.ReadFile(cleanedOutputPath)
+	b, err := os.ReadFile(cleanOut)
 	require.NoError(t, err)
-	assert.Contains(t, string(contents), "type UserV1 struct")
+	assert.Contains(t, string(b), "type UserV1 struct")
 }
 
 //
 // -----------------------------------------------------------------------------
-// run(): cover flag parse error, missing flags usage, and resolveImports panic
+// run(): error branches
 // -----------------------------------------------------------------------------
 
-func TestRun_ErrorBranches(t *testing.T) {
-	// NOT parallel: interacts with filesystem and run() generation.
+// TestRun_Errors covers:
+// - flag parse error
+// - missing args usage
+// - panic on resolveImports error
+func TestRun_Errors(t *testing.T) {
+	// NOT parallel: filesystem + generation
 
-	testCases := []struct {
-		name       string
-		setupArgs  func(t *testing.T) []string
-		wantCode   *int
-		wantStderr string
-		wantPanic  string
+	tests := []struct {
+		name      string
+		args      func(t *testing.T) []string
+		wantCode  *int
+		wantErr   string
+		wantPanic string
 	}{
 		{
-			name: "flag parse error returns 2",
-			setupArgs: func(t *testing.T) []string {
+			name: "flag parse error => 2",
+			args: func(t *testing.T) []string {
 				return []string{"-nope"}
 			},
-			wantCode: ptrInt(2),
+			wantCode: intPtr(2),
 		},
 		{
-			name: "missing flags prints usage and returns 2",
-			setupArgs: func(t *testing.T) []string {
-				return []string{} // no -spec/-out
+			name: "missing flags => usage + 2",
+			args: func(t *testing.T) []string {
+				return []string{}
 			},
-			wantCode:   ptrInt(2),
-			wantStderr: "usage: di1 -spec",
+			wantCode: intPtr(2),
+			wantErr:  "usage: di1 -spec",
 		},
 		{
-			name: "resolveImports error panics (needs config but spec.imports.config empty)",
-			setupArgs: func(t *testing.T) []string {
-				tempDir := t.TempDir()
+			name: "resolveImports error panics (needs config but empty spec.imports.config)",
+			args: func(t *testing.T) []string {
+				dir := t.TempDir()
 
-				// Owner file so findOwnerGoGenerateFile can succeed.
-				ownerFile := filepath.Join(tempDir, "zz_owner.go")
-				ownerSource := `package svc
+				// Owner file so findOwnerGoGenerateFile succeeds
+				owner := filepath.Join(dir, "zz_owner.go")
+				require.NoError(t, os.WriteFile(owner, []byte(`package svc
 
 //go:generate go run ../../cmd/di1 -spec ./service.inject.json -out ./out.gen.go
-`
-				require.NoError(t, os.WriteFile(ownerFile, []byte(ownerSource), 0o644))
+`), 0o644))
 
-				// Spec that forces NeedsConfig=true but provides no fallback import path.
-				specPath := filepath.Join(tempDir, "service.inject.json")
-				specJSON := `{
+				// Spec forces NeedsConfig=true but provides no fallback import
+				specPath := filepath.Join(dir, "service.inject.json")
+				require.NoError(t, os.WriteFile(specPath, []byte(`{
   "package": "svc",
   "wrapperBase": "User",
   "versionSuffix": "V1",
@@ -963,35 +947,31 @@ func TestRun_ErrorBranches(t *testing.T) {
   "required": [
     { "name": "DB", "field": "db", "type": "*sql.DB" }
   ]
-}`
-				require.NoError(t, os.WriteFile(specPath, []byte(specJSON), 0o644))
+}`), 0o644))
 
-				// Ensure determineConstructorNeedsConfig returns true by having the constructor take config.Config.
-				sourceFile := filepath.Join(tempDir, "svc.go")
-				source := `package svc
+				// Make determineConstructorNeedsConfig return true
+				require.NoError(t, os.WriteFile(filepath.Join(dir, "svc.go"), []byte(`package svc
 
 import config "example.com/project/autowire/config"
 
 func NewService(cfg config.Config) {}
-`
-				require.NoError(t, os.WriteFile(sourceFile, []byte(source), 0o644))
+`), 0o644))
 
-				outPath := filepath.Join(tempDir, "out.gen.go")
-				return []string{"-spec", specPath, "-out", outPath}
+				out := filepath.Join(dir, "out.gen.go")
+				return []string{"-spec", specPath, "-out", out}
 			},
 			wantPanic: "spec.imports.config is empty",
 		},
 	}
 
-	for _, tc := range testCases {
+	for _, tc := range tests {
 		tc := tc
 		t.Run(tc.name, func(t *testing.T) {
-			args := tc.setupArgs(t)
-
+			args := tc.args(t)
 			var stderr bytes.Buffer
 
 			if tc.wantPanic != "" {
-				requirePanicContains(t, tc.wantPanic, func() {
+				mustPanicContains(t, tc.wantPanic, func() {
 					_ = run(args, &stderr)
 				})
 				return
@@ -1001,54 +981,50 @@ func NewService(cfg config.Config) {}
 			require.NotNil(t, tc.wantCode)
 			require.Equal(t, *tc.wantCode, code)
 
-			if tc.wantStderr != "" {
-				assert.Contains(t, stderr.String(), tc.wantStderr)
+			if tc.wantErr != "" {
+				assert.Contains(t, stderr.String(), tc.wantErr)
 			}
 		})
 	}
 }
-
-func ptrInt(v int) *int { return &v }
 
 //
 // -----------------------------------------------------------------------------
 // Coverage-focused: findOwnerGoGenerateFile IsDir + ReadFile error continue
 // -----------------------------------------------------------------------------
 
-func TestFindOwnerGoGenerateFile_CoversIsDirAndReadFileErrorContinue(t *testing.T) {
+// TestFindOwnerFile_SkipsDirAndReadError covers the IsDir skip and ReadFile error
+// continue branches in findOwnerGoGenerateFile.
+func TestFindOwnerFile_SkipsDirAndReadError(t *testing.T) {
 	// NOT parallel: relies on filesystem entries.
-	packageDir := t.TempDir()
+	dir := t.TempDir()
 
-	// Force: entry.IsDir() == true branch (sorted early)
-	require.NoError(t, os.Mkdir(filepath.Join(packageDir, "00_dir"), 0o755))
+	// IsDir == true branch
+	require.NoError(t, os.Mkdir(filepath.Join(dir, "00_dir"), 0o755))
 
-	// Force: os.ReadFile(filePath) error branch (sorted early).
-	// Prefer a broken symlink (deterministic) over chmod (platform-dependent).
-	brokenSymlinkPath := filepath.Join(packageDir, "01_broken.go")
-	symlinkErr := os.Symlink(filepath.Join(packageDir, "does-not-exist-target"), brokenSymlinkPath)
-	if symlinkErr != nil {
-		// If symlinks aren't supported in the environment, fall back to chmod.
-		unreadableGo := filepath.Join(packageDir, "01_unreadable.go")
-		require.NoError(t, os.WriteFile(unreadableGo, []byte("package svc\n"), 0o644))
-		require.NoError(t, os.Chmod(unreadableGo, 0o000))
-		t.Cleanup(func() { _ = os.Chmod(unreadableGo, 0o644) })
+	// ReadFile error branch (prefer broken symlink; fall back to chmod)
+	broken := filepath.Join(dir, "01_broken.go")
+	if err := os.Symlink(filepath.Join(dir, "does-not-exist-target"), broken); err != nil {
+		unreadable := filepath.Join(dir, "01_unreadable.go")
+		require.NoError(t, os.WriteFile(unreadable, []byte("package svc\n"), 0o644))
+		require.NoError(t, os.Chmod(unreadable, 0o000))
+		t.Cleanup(func() { _ = os.Chmod(unreadable, 0o644) })
 	}
 
-	// Add a couple of files that should be skipped by suffix rules
-	require.NoError(t, os.WriteFile(filepath.Join(packageDir, "02_readme.md"), []byte("ignore"), 0o644))
-	require.NoError(t, os.WriteFile(filepath.Join(packageDir, "03_owner_test.go"), []byte("package svc\n"), 0o644))
+	// suffix skip files
+	require.NoError(t, os.WriteFile(filepath.Join(dir, "02_readme.md"), []byte("ignore"), 0o644))
+	require.NoError(t, os.WriteFile(filepath.Join(dir, "03_owner_test.go"), []byte("package svc\n"), 0o644))
 
-	// Matching owner file must sort LAST so we don't return early.
-	expectedOwnerPath := filepath.Join(packageDir, "zz_owner.go")
-	ownerSource := `package svc
+	// matching owner file must sort last
+	want := filepath.Join(dir, "zz_owner.go")
+	require.NoError(t, os.WriteFile(want, []byte(`package svc
 
 //go:generate go run ../../cmd/di1 -spec ./specs/x.inject.json -out ./x.gen.go
-`
-	require.NoError(t, os.WriteFile(expectedOwnerPath, []byte(ownerSource), 0o644))
+`), 0o644))
 
-	found, err := findOwnerGoGenerateFile(packageDir)
+	found, err := findOwnerGoGenerateFile(dir)
 	require.NoError(t, err)
-	assert.Equal(t, expectedOwnerPath, found)
+	assert.Equal(t, want, found)
 }
 
 //
@@ -1056,20 +1032,25 @@ func TestFindOwnerGoGenerateFile_CoversIsDirAndReadFileErrorContinue(t *testing.
 // Coverage-focused: determineConstructorNeedsConfig suffix continues
 // -----------------------------------------------------------------------------
 
-func TestDetermineConstructorNeedsConfig_CoversSuffixFilterContinues(t *testing.T) {
+// TestCtorNeedsConfig_SkipsSuffixes covers suffix filter continues in
+// determineConstructorNeedsConfig.
+func TestCtorNeedsConfig_SkipsSuffixes(t *testing.T) {
 	// NOT parallel: filesystem order sensitive for coverage.
-	sourceDir := t.TempDir()
+	dir := t.TempDir()
 
-	// These must hit:
-	// if !strings.HasSuffix(".go") || HasSuffix("_test.go") || HasSuffix(".gen.go") { continue }
+	// Hits:
+	// - not .go
+	// - _test.go
+	// - .gen.go
+	require.NoError(t, os.WriteFile(filepath.Join(dir, "00_notes.txt"), []byte("ignore"), 0o644))
+	require.NoError(t, os.WriteFile(filepath.Join(dir, "01_svc_test.go"), []byte("package svc\n"), 0o644))
+	require.NoError(t, os.WriteFile(filepath.Join(dir, "02_svc.gen.go"), []byte("package svc\n"), 0o644))
 
-	require.NoError(t, os.WriteFile(filepath.Join(sourceDir, "00_notes.txt"), []byte("ignore"), 0o644))          // not .go
-	require.NoError(t, os.WriteFile(filepath.Join(sourceDir, "01_svc_test.go"), []byte("package svc\n"), 0o644)) // _test.go
-	require.NoError(t, os.WriteFile(filepath.Join(sourceDir, "02_svc.gen.go"), []byte("package svc\n"), 0o644))  // .gen.go
-	require.NoError(t, os.WriteFile(filepath.Join(sourceDir, "zz_svc.go"), []byte(`package svc
+	// real constructor
+	require.NoError(t, os.WriteFile(filepath.Join(dir, "zz_svc.go"), []byte(`package svc
 func NewService(cfg config.Config) {}
-`), 0o644)) // real constructor
+`), 0o644))
 
 	spec := &Spec{Constructor: "NewService"}
-	assert.True(t, determineConstructorNeedsConfig(spec, sourceDir))
+	assert.True(t, determineConstructorNeedsConfig(spec, dir))
 }

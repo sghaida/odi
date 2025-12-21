@@ -1,4 +1,4 @@
-# odi/di — v3 code-generated facades (di1) for explicit injection (Go)
+# odi — v3 code-generated facades (di1) for explicit injection (Go)
 
 Version **v3** introduces **code generation** (`cmd/di1`) to keep wiring **explicit** while adding
 **compile-time ergonomics**:
@@ -53,15 +53,15 @@ In those cases consider:
 
 ## How v3 fits next to v1 and v2
 
-| Feature / Style              | v1 (`di.Service[T]`) | v2 (construct-only) | v3 (`di1` codegen) |
-|-----------------------------|----------------------|---------------------|--------------------|
-| Code generation              | ❌                   | ❌                  | ✅                 |
-| Injectors helpers            | ✅                   | ❌                  | ✅ (generated)     |
-| Required dependency validation| ✅                  | ❌                  | ✅ (`Build`)       |
-| Dependency bag / introspection| ✅                  | ❌                  | ❌                 |
-| Manual wiring                | ✅                   | ✅                  | ✅                 |
-| Boilerplate in `main`        | Medium               | Low                 | Low                |
-| Container / graph resolution | ❌                   | ❌                  | ❌                 |
+| Feature / Style                | v1 (`di.Service[T]`) | v2 (construct-only) | v3 (`di1` codegen) |
+|--------------------------------|----------------------|---------------------|--------------------|
+| Code generation                | ❌                    | ❌                   | ✅                  |
+| Injectors helpers              | ✅                    | ❌                   | ✅ (generated)      |
+| Required dependency validation | ✅                    | ❌                   | ✅ (`Build`)        |
+| Dependency bag / introspection | ✅                    | ❌                   | ❌                  |
+| Manual wiring                  | ✅                    | ✅                   | ✅                  |
+| Boilerplate in `main`          | Medium               | Low                 | Low                |
+| Container / graph resolution   | ❌                    | ❌                   | ❌                  |
 
 Rule of thumb:
 

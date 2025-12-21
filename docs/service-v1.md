@@ -1,4 +1,4 @@
-# odi/di — tiny generic dependency injection helper (Go)
+# odi — v1 tiny generic dependency injection helper (Go)
 
 `di` is a lightweight, explicit wiring helper built around one idea:
 

@@ -1,0 +1,51 @@
+{
+  "package": "v4",
+  "wrapperBase": "Core",
+  "versionSuffix": "V4",
+  "implType": "Core",
+  "constructor": "NewCore",
+  "imports": {},
+  "config": { "enabled": true },
+  "facadeName": "CoreV4",
+  "publicConstructorName": "NewCoreV4",
+  "injectPolicy": { "onOverwrite": "error" },
+
+  "cyclic": false,
+
+  "required": [
+    { "name": "Alpha", "field": "alpha", "type": "*Alpha", "nilable": true },
+    { "name": "Beta", "field": "beta", "type": "*Beta", "nilable": true }
+  ],
+
+  "optional": [
+    {
+      "name": "Tracer",
+      "type": "Tracer",
+      "registryKey": "v4.tracer",
+      "apply": { "kind": "setter", "name": "SetTracer" },
+      "defaultExpr": "NoopTracer{}"
+    },
+    {
+      "name": "Metrics",
+      "type": "Metrics",
+      "registryKey": "v4.metrics",
+      "apply": { "kind": "field", "name": "metrics" },
+      "defaultExpr": "NoopMetrics{}"
+    }
+  ],
+
+  "methods": [
+    {
+      "name": "Process",
+      "params": [
+        { "name": "ctx", "type": "context.Context" },
+        { "name": "req", "type": "ProcessRequest" }
+      ],
+      "returns": [
+        { "type": "ProcessResponse" },
+        { "type": "error" }
+      ],
+      "requires": ["Alpha", "Beta"]
+    }
+  ]
+}

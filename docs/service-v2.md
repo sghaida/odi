@@ -1,4 +1,4 @@
-# odi/di — v2 minimal dependency construction (Go)
+# odi — v2 minimal dependency construction (Go)
 
 Version **v2** of `odi/di` is an intentionally **minimal** approach to dependency
 construction in Go.

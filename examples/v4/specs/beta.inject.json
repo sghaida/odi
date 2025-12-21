@@ -1,0 +1,35 @@
+{
+  "package": "v4",
+  "wrapperBase": "Beta",
+  "versionSuffix": "V4",
+  "implType": "Beta",
+  "constructor": "NewBeta",
+  "imports": {
+    "config": "github.com/sghaida/odi/examples/v4/config"
+  },
+  "config": { "enabled": true },
+  "facadeName": "BetaV4",
+  "publicConstructorName": "NewBetaV4",
+  "injectPolicy": { "onOverwrite": "error" },
+
+  "cyclic": true,
+
+  "required": [
+    { "name": "Alpha", "field": "alpha", "type": "*Alpha", "nilable": true }
+  ],
+  "optional": [],
+  "methods": [
+    {
+      "name": "DoBeta",
+      "params": [
+        { "name": "ctx", "type": "context.Context" },
+        { "name": "DoBeta", "type": "BetaRequest" }
+      ],
+      "returns": [
+        { "type": "BetaResponse" },
+        { "type": "error" }
+      ],
+      "requires": ["Alpha"]
+    }
+  ]
+}

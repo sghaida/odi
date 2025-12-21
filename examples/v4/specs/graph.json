@@ -1,0 +1,26 @@
+{
+  "package": "v4",
+  "imports": {},
+
+  "config": {
+    "enabled": true
+  },
+
+  "roots": [
+    {
+      "name": "BuildAppV4",
+      "buildWithRegistry": true,
+      "services": [
+        { "var": "alpha", "facadeCtor": "NewAlphaV4", "facadeType": "*AlphaV4", "implType": "Alpha" },
+        { "var": "beta", "facadeCtor": "NewBetaV4", "facadeType": "*BetaV4", "implType": "Beta" },
+        { "var": "core", "facadeCtor": "NewCoreV4", "facadeType": "*CoreV4", "implType": "Core" }
+      ],
+      "wiring": [
+        { "to": "alpha", "call": "InjectBeta", "argFrom": "beta" },
+        { "to": "beta", "call": "InjectAlpha", "argFrom": "alpha" },
+        { "to": "core", "call": "InjectAlpha", "argFrom": "alpha" },
+        { "to": "core", "call": "InjectBeta", "argFrom": "beta" }
+      ]
+    }
+  ]
+}

@@ -1,0 +1,34 @@
+{
+  "package": "v4",
+  "wrapperBase": "Alpha",
+  "versionSuffix": "V4",
+  "implType": "Alpha",
+  "constructor": "NewAlpha",
+  "imports": {},
+  "config": { "enabled": true },
+
+  "facadeName": "AlphaV4",
+  "publicConstructorName": "NewAlphaV4",
+  "injectPolicy": { "onOverwrite": "error" },
+
+  "cyclic": true,
+
+  "required": [
+    { "name": "Beta", "field": "beta", "type": "*Beta", "nilable": true }
+  ],
+  "optional": [],
+  "methods": [
+    {
+      "name": "DoAlpha",
+      "params": [
+        { "name": "ctx", "type": "context.Context" },
+        { "name": "req", "type": "AlphaRequest" }
+      ],
+      "returns": [
+        { "type": "AlphaResponse" },
+        { "type": "error" }
+      ],
+      "requires": ["Beta"]
+    }
+  ]
+}
