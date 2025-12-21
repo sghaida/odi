@@ -1,0 +1,11 @@
+{
+  "package": "v3",
+  "wrapperBase": "DecisionSvc",
+  "versionSuffix": "V3",
+  "implType": "DecisionSvc",
+  "constructor": "NewDecisionSvc",
+  "required": [
+    { "name": "DecisionStore", "field": "store", "type": "DecisionStore" },
+    { "name": "FraudChecker",  "field": "checker", "type": "FraudChecker" }
+  ]
+}

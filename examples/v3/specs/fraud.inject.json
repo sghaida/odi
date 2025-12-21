@@ -1,0 +1,17 @@
+{
+  "package": "v3",
+  "wrapperBase": "FraudSvc",
+  "versionSuffix": "V3",
+  "implType": "FraudSvc",
+  "constructor": "NewFraudSvc",
+  "imports": {
+    "config": "github.com/sghaida/odi/examples/v3/config"
+  },
+  "required": [
+    { "name": "TransactionGetter", "field": "txGetter", "type": "TransactionGetter" },
+    { "name": "DecisionWriter", "field": "writer", "type": "DecisionWriter" }
+  ],
+  "optional": [
+    { "name": "Logger", "field": "logger", "type": "Logger"}
+  ]
+}
