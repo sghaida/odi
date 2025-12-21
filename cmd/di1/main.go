@@ -1,4 +1,3 @@
-// cmd/di1/main.go
 package main
 
 import (

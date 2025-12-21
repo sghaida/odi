@@ -1,4 +1,3 @@
-// odi/di2/main.go
 package main
 
 import (
