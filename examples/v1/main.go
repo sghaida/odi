@@ -5,8 +5,8 @@ import (
 	"fmt"
 	"log"
 
+	"github.com/sghaida/odi/di"
 	"github.com/sghaida/odi/examples"
-	"github.com/sghaida/odi/examples/di"
 )
 
 /*

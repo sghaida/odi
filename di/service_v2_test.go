@@ -3,7 +3,7 @@ package di_test
 import (
 	"testing"
 
-	di2 "github.com/sghaida/odi/examples/di"
+	"github.com/sghaida/odi/di"
 	"github.com/stretchr/testify/require"
 )
 
@@ -19,7 +19,7 @@ func TestNew_ServiceV2_Table(t *testing.T) {
 			run: func(t *testing.T) {
 				t.Parallel()
 
-				s := di2.New(func() *di2.DB { return &di2.DB{DSN: "postgres://prod"} })
+				s := di.New(func() *di.DB { return &di.DB{DSN: "postgres://prod"} })
 				require.NotNil(t, s.Val)
 				require.Equal(t, "postgres://prod", s.Val.DSN)
 			},
@@ -29,7 +29,7 @@ func TestNew_ServiceV2_Table(t *testing.T) {
 			run: func(t *testing.T) {
 				t.Parallel()
 
-				s := di2.New(func() *di2.Logger { return &di2.Logger{Level: "info"} })
+				s := di.New(func() *di.Logger { return &di.Logger{Level: "info"} })
 				require.NotNil(t, s.Val)
 				require.Equal(t, "info", s.Val.Level)
 			},
@@ -39,7 +39,7 @@ func TestNew_ServiceV2_Table(t *testing.T) {
 			run: func(t *testing.T) {
 				t.Parallel()
 
-				s := di2.New(func() *di2.BasketService { return &di2.BasketService{} })
+				s := di.New(func() *di.BasketService { return &di.BasketService{} })
 				require.NotNil(t, s.Val)
 				require.Nil(t, s.Val.DB)
 				require.Nil(t, s.Val.Logger)
@@ -51,11 +51,11 @@ func TestNew_ServiceV2_Table(t *testing.T) {
 				t.Parallel()
 
 				// Construct deps
-				db := di2.New(func() *di2.DB { return &di2.DB{DSN: "postgres://prod"} })
-				logger := di2.New(func() *di2.Logger { return &di2.Logger{Level: "debug"} })
+				db := di.New(func() *di.DB { return &di.DB{DSN: "postgres://prod"} })
+				logger := di.New(func() *di.Logger { return &di.Logger{Level: "debug"} })
 
 				// Construct service
-				basket := di2.New(func() *di2.BasketService { return &di2.BasketService{} })
+				basket := di.New(func() *di.BasketService { return &di.BasketService{} })
 
 				// V2 "DI": manual pointer wiring
 				basket.Val.DB = db.Val
@@ -78,7 +78,7 @@ func TestNew_ServiceV2_Table(t *testing.T) {
 			run: func(t *testing.T) {
 				t.Parallel()
 
-				db := di2.New(func() *di2.DB { return &di2.DB{DSN: "sqlite://"} })
+				db := di.New(func() *di.DB { return &di.DB{DSN: "sqlite://"} })
 				db2 := db // copy the container
 
 				require.Same(t, db.Val, db2.Val)

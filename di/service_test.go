@@ -4,7 +4,7 @@ import (
 	"errors"
 	"testing"
 
-	di2 "github.com/sghaida/odi/examples/di"
+	"github.com/sghaida/odi/di"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
@@ -13,7 +13,7 @@ import (
 func TestInitAndValue(t *testing.T) {
 	t.Parallel()
 
-	svc := di2.Init(func() *di2.UserService { return &di2.UserService{} })
+	svc := di.Init(func() *di.UserService { return &di.UserService{} })
 
 	require.NotNil(t, svc)
 	require.NotNil(t, svc.Value())
@@ -25,14 +25,14 @@ func TestInitAndValue(t *testing.T) {
 func TestKey(t *testing.T) {
 	t.Parallel()
 
-	assert.Equal(t, di2.DependencyKey("db"), di2.Key("db"))
+	assert.Equal(t, di.DependencyKey("db"), di.Key("db"))
 }
 
 // With / WithAll
 func TestWith_NilInjector_NoOp(t *testing.T) {
 	t.Parallel()
 
-	svc := di2.Init(func() *di2.UserService { return &di2.UserService{} })
+	svc := di.Init(func() *di.UserService { return &di.UserService{} })
 	before := svc.Value()
 
 	got, err := svc.With(nil)
@@ -44,21 +44,21 @@ func TestWith_NilInjector_NoOp(t *testing.T) {
 func TestWithAll_AppliesInOrderAndStopsOnError(t *testing.T) {
 	t.Parallel()
 
-	dbKey := di2.Key("db")
-	logKey := di2.Key("logger")
+	dbKey := di.Key("db")
+	logKey := di.Key("logger")
 
-	db := di2.Init(func() *di2.DB { return &di2.DB{DSN: "postgres://"} })
-	logger := di2.Init(func() *di2.Logger { return &di2.Logger{Level: "info"} })
+	db := di.Init(func() *di.DB { return &di.DB{DSN: "postgres://"} })
+	logger := di.Init(func() *di.Logger { return &di.Logger{Level: "info"} })
 
-	user := di2.Init(func() *di2.UserService { return &di2.UserService{} })
+	user := di.Init(func() *di.UserService { return &di.UserService{} })
 
-	injDB := di2.Injecting(dbKey, db, func(u *di2.UserService, d *di2.DB) { u.DB = d })
-	injLogger := di2.Injecting(logKey, logger, func(u *di2.UserService, l *di2.Logger) { u.Logger = l })
+	injDB := di.Injecting(dbKey, db, func(u *di.UserService, d *di.DB) { u.DB = d })
+	injLogger := di.Injecting(logKey, logger, func(u *di.UserService, l *di.Logger) { u.Logger = l })
 
 	_, err := user.WithAll(injDB, injDB, injLogger)
 	require.Error(t, err)
 
-	var dup di2.DuplicateKeyError
+	var dup di.DuplicateKeyError
 	require.True(t, errors.As(err, &dup))
 	assert.Equal(t, dbKey, dup.Key)
 
@@ -77,57 +77,57 @@ func TestWithAll_AppliesInOrderAndStopsOnError(t *testing.T) {
 func TestInjecting_Errors(t *testing.T) {
 	t.Parallel()
 
-	key := di2.Key("db")
+	key := di.Key("db")
 
-	validDep := di2.Init(func() *di2.DB { return &di2.DB{} })
-	validBind := func(u *di2.UserService, d *di2.DB) { u.DB = d }
+	validDep := di.Init(func() *di.DB { return &di.DB{} })
+	validBind := func(u *di.UserService, d *di.DB) { u.DB = d }
 
 	cases := []struct {
 		name      string
-		targetSvc *di2.Service[di2.UserService]
-		depSvc    *di2.Service[di2.DB]
-		bind      func(*di2.UserService, *di2.DB)
+		targetSvc *di.Service[di.UserService]
+		depSvc    *di.Service[di.DB]
+		bind      func(*di.UserService, *di.DB)
 
 		wantIs  error
 		wantAs  any
-		wantKey di2.DependencyKey
+		wantKey di.DependencyKey
 	}{
 		{
 			name:      "nil target service",
 			targetSvc: nil,
 			depSvc:    validDep,
 			bind:      validBind,
-			wantIs:    di2.ErrNilTarget,
+			wantIs:    di.ErrNilTarget,
 		},
 		{
 			name:      "nil target value",
-			targetSvc: &di2.Service[di2.UserService]{Val: nil, Deps: map[di2.DependencyKey]any{}},
+			targetSvc: &di.Service[di.UserService]{Val: nil, Deps: map[di.DependencyKey]any{}},
 			depSvc:    validDep,
 			bind:      validBind,
-			wantIs:    di2.ErrNilTarget,
+			wantIs:    di.ErrNilTarget,
 		},
 		{
 			name:      "nil dependency service",
-			targetSvc: di2.Init(func() *di2.UserService { return &di2.UserService{} }),
+			targetSvc: di.Init(func() *di.UserService { return &di.UserService{} }),
 			depSvc:    nil,
 			bind:      validBind,
-			wantAs:    (*di2.NilDependencyServiceError)(nil),
+			wantAs:    (*di.NilDependencyServiceError)(nil),
 			wantKey:   key,
 		},
 		{
 			name:      "nil dependency value",
-			targetSvc: di2.Init(func() *di2.UserService { return &di2.UserService{} }),
-			depSvc:    &di2.Service[di2.DB]{Val: nil, Deps: map[di2.DependencyKey]any{}},
+			targetSvc: di.Init(func() *di.UserService { return &di.UserService{} }),
+			depSvc:    &di.Service[di.DB]{Val: nil, Deps: map[di.DependencyKey]any{}},
 			bind:      validBind,
-			wantAs:    (*di2.NilDependencyServiceError)(nil),
+			wantAs:    (*di.NilDependencyServiceError)(nil),
 			wantKey:   key,
 		},
 		{
 			name:      "nil bind function",
-			targetSvc: di2.Init(func() *di2.UserService { return &di2.UserService{} }),
+			targetSvc: di.Init(func() *di.UserService { return &di.UserService{} }),
 			depSvc:    validDep,
 			bind:      nil,
-			wantAs:    (*di2.NilBindError)(nil),
+			wantAs:    (*di.NilBindError)(nil),
 			wantKey:   key,
 		},
 	}
@@ -137,7 +137,7 @@ func TestInjecting_Errors(t *testing.T) {
 		t.Run(tc.name, func(t *testing.T) {
 			t.Parallel()
 
-			inj := di2.Injecting(key, tc.depSvc, tc.bind)
+			inj := di.Injecting(key, tc.depSvc, tc.bind)
 			err := inj(tc.targetSvc)
 			require.Error(t, err)
 
@@ -147,13 +147,13 @@ func TestInjecting_Errors(t *testing.T) {
 			}
 
 			switch tc.wantAs.(type) {
-			case *di2.NilDependencyServiceError:
-				var got di2.NilDependencyServiceError
+			case *di.NilDependencyServiceError:
+				var got di.NilDependencyServiceError
 				require.True(t, errors.As(err, &got))
 				assert.Equal(t, tc.wantKey, got.Key)
 
-			case *di2.NilBindError:
-				var got di2.NilBindError
+			case *di.NilBindError:
+				var got di.NilBindError
 				require.True(t, errors.As(err, &got))
 				assert.Equal(t, tc.wantKey, got.Key)
 
@@ -168,13 +168,13 @@ func TestInjecting_Errors(t *testing.T) {
 func TestInjecting_SuccessAndDepsMapCreationAndDuplicate(t *testing.T) {
 	t.Parallel()
 
-	dbKey := di2.Key("db")
+	dbKey := di.Key("db")
 
-	db := di2.Init(func() *di2.DB { return &di2.DB{DSN: "mysql://"} })
+	db := di.Init(func() *di.DB { return &di.DB{DSN: "mysql://"} })
 
 	// cover the branch: if s.Deps == nil { s.Deps = make(...) }
-	targetNilDeps := &di2.Service[di2.UserService]{Val: &di2.UserService{}, Deps: nil}
-	inj := di2.Injecting(dbKey, db, func(u *di2.UserService, d *di2.DB) { u.DB = d })
+	targetNilDeps := &di.Service[di.UserService]{Val: &di.UserService{}, Deps: nil}
+	inj := di.Injecting(dbKey, db, func(u *di.UserService, d *di.DB) { u.DB = d })
 
 	require.NoError(t, inj(targetNilDeps))
 	require.NotNil(t, targetNilDeps.Deps)
@@ -183,20 +183,20 @@ func TestInjecting_SuccessAndDepsMapCreationAndDuplicate(t *testing.T) {
 	assert.Equal(t, "mysql://", targetNilDeps.Val.DB.DSN)
 
 	// Now cover duplicate detection via the normal With path
-	user := di2.Init(func() *di2.UserService { return &di2.UserService{} })
+	user := di.Init(func() *di.UserService { return &di.UserService{} })
 	_, err := user.With(inj)
 	require.NoError(t, err)
 
 	raw, ok := user.GetAny(dbKey)
 	require.True(t, ok)
-	got, ok := raw.(*di2.DB)
+	got, ok := raw.(*di.DB)
 	require.True(t, ok)
 	assert.Same(t, db.Value(), got)
 
 	_, err = user.With(inj)
 	require.Error(t, err)
 
-	var dup di2.DuplicateKeyError
+	var dup di.DuplicateKeyError
 	require.True(t, errors.As(err, &dup))
 	assert.Equal(t, dbKey, dup.Key)
 }
@@ -205,54 +205,54 @@ func TestInjecting_SuccessAndDepsMapCreationAndDuplicate(t *testing.T) {
 func TestAccessors_GetAsTryGetAsMustGetAs(t *testing.T) {
 	t.Parallel()
 
-	dbKey := di2.Key("db")
-	basketKey := di2.Key("basket")
+	dbKey := di.Key("db")
+	basketKey := di.Key("basket")
 
-	db := di2.Init(func() *di2.DB { return &di2.DB{DSN: "sqlite"} })
-	basket := di2.Init(func() *di2.BasketService { return &di2.BasketService{} })
-	user := di2.Init(func() *di2.UserService { return &di2.UserService{} })
+	db := di.Init(func() *di.DB { return &di.DB{DSN: "sqlite"} })
+	basket := di.Init(func() *di.BasketService { return &di.BasketService{} })
+	user := di.Init(func() *di.UserService { return &di.UserService{} })
 
 	_, err := user.WithAll(
-		di2.Injecting(dbKey, db, func(u *di2.UserService, d *di2.DB) { u.DB = d }),
-		di2.Injecting(basketKey, basket, func(u *di2.UserService, b *di2.BasketService) { u.Basket = b }),
+		di.Injecting(dbKey, db, func(u *di.UserService, d *di.DB) { u.DB = d }),
+		di.Injecting(basketKey, basket, func(u *di.UserService, b *di.BasketService) { u.Basket = b }),
 	)
 	require.NoError(t, err)
 
 	// GetAs success
-	gotDB, ok := di2.GetAs[di2.UserService, di2.DB](user, dbKey)
+	gotDB, ok := di.GetAs[di.UserService, di.DB](user, dbKey)
 	require.True(t, ok)
 	assert.Same(t, db.Value(), gotDB)
 
 	// MustGetAs success (covers `return d`)
-	gotMust := di2.MustGetAs[di2.UserService, di2.DB](user, dbKey)
+	gotMust := di.MustGetAs[di.UserService, di.DB](user, dbKey)
 	require.NotNil(t, gotMust)
 	assert.Same(t, db.Value(), gotMust)
 
 	// TryGetAs missing
-	_, err = di2.TryGetAs[di2.UserService, di2.DB](user, di2.Key("missing"))
+	_, err = di.TryGetAs[di.UserService, di.DB](user, di.Key("missing"))
 	require.Error(t, err)
 
 	// MustGetAs panic on wrong key/type
 	assert.Panics(t, func() {
-		_ = di2.MustGetAs[di2.UserService, di2.DB](user, basketKey)
+		_ = di.MustGetAs[di.UserService, di.DB](user, basketKey)
 	})
 }
 
 func TestAccessors_GetAsAndHas_Guards(t *testing.T) {
 	t.Parallel()
 
-	dbKey := di2.Key("db")
+	dbKey := di.Key("db")
 
 	type guardCase struct {
 		name string
-		svc  *di2.Service[di2.UserService]
+		svc  *di.Service[di.UserService]
 	}
 
 	cases := []guardCase{
 		{name: "nil service", svc: nil},
-		{name: "nil deps", svc: &di2.Service[di2.UserService]{Val: &di2.UserService{}, Deps: nil}},
-		{name: "missing key", svc: &di2.Service[di2.UserService]{Val: &di2.UserService{}, Deps: map[di2.DependencyKey]any{}}},
-		{name: "raw nil value", svc: &di2.Service[di2.UserService]{Val: &di2.UserService{}, Deps: map[di2.DependencyKey]any{dbKey: nil}}},
+		{name: "nil deps", svc: &di.Service[di.UserService]{Val: &di.UserService{}, Deps: nil}},
+		{name: "missing key", svc: &di.Service[di.UserService]{Val: &di.UserService{}, Deps: map[di.DependencyKey]any{}}},
+		{name: "raw nil value", svc: &di.Service[di.UserService]{Val: &di.UserService{}, Deps: map[di.DependencyKey]any{dbKey: nil}}},
 	}
 
 	for _, tc := range cases {
@@ -263,7 +263,7 @@ func TestAccessors_GetAsAndHas_Guards(t *testing.T) {
 			// covers GetAs guards:
 			// - s==nil or s.Deps==nil
 			// - !ok || raw==nil
-			got, ok := di2.GetAs[di2.UserService, di2.DB](tc.svc, dbKey)
+			got, ok := di.GetAs[di.UserService, di.DB](tc.svc, dbKey)
 			assert.Nil(t, got)
 			assert.False(t, ok)
 
@@ -271,7 +271,7 @@ func TestAccessors_GetAsAndHas_Guards(t *testing.T) {
 			if tc.svc == nil || tc.svc.Deps == nil {
 				var has bool
 				if tc.svc == nil {
-					has = (*di2.Service[di2.UserService])(nil).Has(dbKey)
+					has = (*di.Service[di.UserService])(nil).Has(dbKey)
 				} else {
 					has = tc.svc.Has(dbKey)
 				}
@@ -283,7 +283,7 @@ func TestAccessors_GetAsAndHas_Guards(t *testing.T) {
 				var v any
 				var ok2 bool
 				if tc.svc == nil {
-					v, ok2 = (*di2.Service[di2.UserService])(nil).GetAny(dbKey)
+					v, ok2 = (*di.Service[di.UserService])(nil).GetAny(dbKey)
 				} else {
 					v, ok2 = tc.svc.GetAny(dbKey)
 				}
@@ -297,19 +297,19 @@ func TestAccessors_GetAsAndHas_Guards(t *testing.T) {
 func TestAccessors_TryGetAs_Table(t *testing.T) {
 	t.Parallel()
 
-	dbKey := di2.Key("db")
-	loggerKey := di2.Key("logger")
+	dbKey := di.Key("db")
+	loggerKey := di.Key("logger")
 
 	// success setup: inject DB so TryGetAs hits `return d, nil`
-	db := di2.Init(func() *di2.DB { return &di2.DB{DSN: "postgres://prod"} })
-	user := di2.Init(func() *di2.UserService { return &di2.UserService{} })
-	_, err := user.With(di2.Injecting(dbKey, db, func(u *di2.UserService, d *di2.DB) { u.DB = d }))
+	db := di.Init(func() *di.DB { return &di.DB{DSN: "postgres://prod"} })
+	user := di.Init(func() *di.UserService { return &di.UserService{} })
+	_, err := user.With(di.Injecting(dbKey, db, func(u *di.UserService, d *di.DB) { u.DB = d }))
 	require.NoError(t, err)
 
 	cases := []struct {
 		name      string
-		svc       *di2.Service[di2.UserService]
-		key       di2.DependencyKey
+		svc       *di.Service[di.UserService]
+		key       di.DependencyKey
 		wantErrAs any
 		wantType  string
 		wantOK    bool
@@ -318,21 +318,21 @@ func TestAccessors_TryGetAs_Table(t *testing.T) {
 			name:      "nil service -> missing",
 			svc:       nil,
 			key:       dbKey,
-			wantErrAs: di2.MissingDependencyError{},
+			wantErrAs: di.MissingDependencyError{},
 		},
 		{
 			name:      "nil deps -> missing",
-			svc:       &di2.Service[di2.UserService]{Val: &di2.UserService{}, Deps: nil},
+			svc:       &di.Service[di.UserService]{Val: &di.UserService{}, Deps: nil},
 			key:       dbKey,
-			wantErrAs: di2.MissingDependencyError{},
+			wantErrAs: di.MissingDependencyError{},
 		},
 		{
 			name: "wrong type -> wrong type error",
-			svc: &di2.Service[di2.UserService]{Val: &di2.UserService{}, Deps: map[di2.DependencyKey]any{
-				loggerKey: &di2.Logger{Level: "info"},
+			svc: &di.Service[di.UserService]{Val: &di.UserService{}, Deps: map[di.DependencyKey]any{
+				loggerKey: &di.Logger{Level: "info"},
 			}},
 			key:       loggerKey,
-			wantErrAs: di2.WrongTypeDependencyError{},
+			wantErrAs: di.WrongTypeDependencyError{},
 			wantType:  "*di.Logger",
 		},
 		{
@@ -348,7 +348,7 @@ func TestAccessors_TryGetAs_Table(t *testing.T) {
 		t.Run(tc.name, func(t *testing.T) {
 			t.Parallel()
 
-			got, err := di2.TryGetAs[di2.UserService, di2.DB](tc.svc, tc.key)
+			got, err := di.TryGetAs[di.UserService, di.DB](tc.svc, tc.key)
 
 			if tc.wantOK {
 				require.NoError(t, err)
@@ -360,14 +360,14 @@ func TestAccessors_TryGetAs_Table(t *testing.T) {
 			require.Error(t, err)
 
 			switch tc.wantErrAs.(type) {
-			case di2.MissingDependencyError:
-				var me di2.MissingDependencyError
+			case di.MissingDependencyError:
+				var me di.MissingDependencyError
 				require.True(t, errors.As(err, &me))
 				assert.Equal(t, tc.key, me.Key)
 				assert.Equal(t, `di: dependency "`+string(tc.key)+`" missing`, me.Error())
 
-			case di2.WrongTypeDependencyError:
-				var we di2.WrongTypeDependencyError
+			case di.WrongTypeDependencyError:
+				var we di.WrongTypeDependencyError
 				require.True(t, errors.As(err, &we))
 				assert.Equal(t, tc.key, we.Key)
 				assert.Equal(t, tc.wantType, we.GotType)
@@ -386,31 +386,31 @@ func TestClone_BranchesAndCopyBehavior(t *testing.T) {
 	t.Parallel()
 
 	// covers: if s == nil { return nil }
-	var nilSvc *di2.Service[di2.UserService]
+	var nilSvc *di.Service[di.UserService]
 	assert.Nil(t, nilSvc.Clone())
 
 	// covers: else branch where len(s.Deps)==0 -> make(map...)
-	empty := &di2.Service[di2.UserService]{Val: &di2.UserService{}, Deps: map[di2.DependencyKey]any{}}
+	empty := &di.Service[di.UserService]{Val: &di.UserService{}, Deps: map[di.DependencyKey]any{}}
 	cpEmpty := empty.Clone()
 	require.NotNil(t, cpEmpty)
 	require.NotNil(t, cpEmpty.Deps)
 	assert.Empty(t, cpEmpty.Deps)
-	cpEmpty.Deps[di2.Key("x")] = "y"
-	_, ok := empty.Deps[di2.Key("x")]
+	cpEmpty.Deps[di.Key("x")] = "y"
+	_, ok := empty.Deps[di.Key("x")]
 	assert.False(t, ok)
 
 	// covers: copy deps map but share Val
-	key := di2.Key("db")
-	db := di2.Init(func() *di2.DB { return &di2.DB{DSN: "clone"} })
-	user := di2.Init(func() *di2.UserService { return &di2.UserService{} })
-	_, err := user.With(di2.Injecting(key, db, func(u *di2.UserService, d *di2.DB) { u.DB = d }))
+	key := di.Key("db")
+	db := di.Init(func() *di.DB { return &di.DB{DSN: "clone"} })
+	user := di.Init(func() *di.UserService { return &di.UserService{} })
+	_, err := user.With(di.Injecting(key, db, func(u *di.UserService, d *di.DB) { u.DB = d }))
 	require.NoError(t, err)
 
 	cp := user.Clone()
 	require.NotNil(t, cp)
 	assert.Same(t, user.Val, cp.Val)
-	cp.Deps[di2.Key("extra")] = "x"
-	_, ok = user.Deps[di2.Key("extra")]
+	cp.Deps[di.Key("extra")] = "x"
+	_, ok = user.Deps[di.Key("extra")]
 	assert.False(t, ok)
 }
 
@@ -425,27 +425,27 @@ func TestErrors_StringAndTyping(t *testing.T) {
 	}{
 		{
 			name: "DuplicateKeyError",
-			err:  di2.DuplicateKeyError{Key: di2.Key("db")},
+			err:  di.DuplicateKeyError{Key: di.Key("db")},
 			want: `di: duplicate dependency key "db"`,
 		},
 		{
 			name: "MissingDependencyError",
-			err:  di2.MissingDependencyError{Key: di2.Key("db")},
+			err:  di.MissingDependencyError{Key: di.Key("db")},
 			want: `di: dependency "db" missing`,
 		},
 		{
 			name: "WrongTypeDependencyError",
-			err:  di2.WrongTypeDependencyError{Key: di2.Key("logger"), GotType: "*di.Logger"},
+			err:  di.WrongTypeDependencyError{Key: di.Key("logger"), GotType: "*di.Logger"},
 			want: `di: dependency "logger" has wrong type (*di.Logger)`,
 		},
 		{
 			name: "NilDependencyServiceError",
-			err:  di2.NilDependencyServiceError{Key: di2.Key("db")},
+			err:  di.NilDependencyServiceError{Key: di.Key("db")},
 			want: `di: nil dependency service for key "db"`,
 		},
 		{
 			name: "NilBindError",
-			err:  di2.NilBindError{Key: di2.Key("db")},
+			err:  di.NilBindError{Key: di.Key("db")},
 			want: `di: nil bind function for key "db"`,
 		},
 	}
