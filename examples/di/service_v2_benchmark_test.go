@@ -3,7 +3,7 @@ package di_test
 import (
 	"testing"
 
-	"github.com/sghaida/odi/di"
+	di2 "github.com/sghaida/odi/examples/di"
 )
 
 func BenchmarkNew_DB(b *testing.B) {
@@ -11,7 +11,7 @@ func BenchmarkNew_DB(b *testing.B) {
 	b.ResetTimer()
 
 	for i := 0; i < b.N; i++ {
-		_ = di.New(func() *di.DB { return &di.DB{DSN: "postgres://prod"} })
+		_ = di2.New(func() *di2.DB { return &di2.DB{DSN: "postgres://prod"} })
 	}
 }
 
@@ -20,7 +20,7 @@ func BenchmarkNew_Logger(b *testing.B) {
 	b.ResetTimer()
 
 	for i := 0; i < b.N; i++ {
-		_ = di.New(func() *di.Logger { return &di.Logger{Level: "info"} })
+		_ = di2.New(func() *di2.Logger { return &di2.Logger{Level: "info"} })
 	}
 }
 
@@ -29,7 +29,7 @@ func BenchmarkNew_BasketService(b *testing.B) {
 	b.ResetTimer()
 
 	for i := 0; i < b.N; i++ {
-		_ = di.New(func() *di.BasketService { return &di.BasketService{} })
+		_ = di2.New(func() *di2.BasketService { return &di2.BasketService{} })
 	}
 }
 
@@ -38,7 +38,7 @@ func BenchmarkNew_UserService(b *testing.B) {
 	b.ResetTimer()
 
 	for i := 0; i < b.N; i++ {
-		_ = di.New(func() *di.UserService { return &di.UserService{} })
+		_ = di2.New(func() *di2.UserService { return &di2.UserService{} })
 	}
 }
 
@@ -47,13 +47,13 @@ func BenchmarkWire_BasketService_DB_Logger(b *testing.B) {
 	b.ReportAllocs()
 
 	// Create deps once (common DI usage: singletons)
-	db := di.New(func() *di.DB { return &di.DB{DSN: "postgres://prod"} })
-	logger := di.New(func() *di.Logger { return &di.Logger{Level: "debug"} })
+	db := di2.New(func() *di2.DB { return &di2.DB{DSN: "postgres://prod"} })
+	logger := di2.New(func() *di2.Logger { return &di2.Logger{Level: "debug"} })
 
 	b.ResetTimer()
 
 	for i := 0; i < b.N; i++ {
-		basket := di.New(func() *di.BasketService { return &di.BasketService{} })
+		basket := di2.New(func() *di2.BasketService { return &di2.BasketService{} })
 
 		// "Wiring" step
 		basket.Val.DB = db.Val
@@ -68,19 +68,19 @@ func BenchmarkWire_Chain_User_Basket_DB_Logger(b *testing.B) {
 	b.ReportAllocs()
 
 	// Deps once
-	db := di.New(func() *di.DB { return &di.DB{DSN: "postgres://prod"} })
-	logger := di.New(func() *di.Logger { return &di.Logger{Level: "debug"} })
+	db := di2.New(func() *di2.DB { return &di2.DB{DSN: "postgres://prod"} })
+	logger := di2.New(func() *di2.Logger { return &di2.Logger{Level: "debug"} })
 
 	b.ResetTimer()
 
 	for i := 0; i < b.N; i++ {
 		// BasketService wired with DB+Logger
-		basket := di.New(func() *di.BasketService { return &di.BasketService{} })
+		basket := di2.New(func() *di2.BasketService { return &di2.BasketService{} })
 		basket.Val.DB = db.Val
 		basket.Val.Logger = logger.Val
 
 		// UserService wired with DB+Logger + BasketService
-		user := di.New(func() *di.UserService { return &di.UserService{} })
+		user := di2.New(func() *di2.UserService { return &di2.UserService{} })
 		user.Val.DB = db.Val
 		user.Val.Logger = logger.Val
 		user.Val.Basket = basket.Val
@@ -88,4 +88,3 @@ func BenchmarkWire_Chain_User_Basket_DB_Logger(b *testing.B) {
 		_ = user
 	}
 }
-
