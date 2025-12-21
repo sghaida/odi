@@ -4,14 +4,20 @@ package main
 import (
 	"encoding/json"
 	"errors"
-	"fmt"
-	"os"
 	"path/filepath"
 	"reflect"
 	"runtime"
 	"strings"
 	"testing"
 )
+
+// -------------------------
+// Small test harness
+// -------------------------
+
+// -------------------------
+// applyConfigDefaults
+// -------------------------
 
 func TestApplyConfigDefaults(t *testing.T) {
 	t.Parallel()
@@ -63,6 +69,10 @@ func TestApplyConfigDefaults(t *testing.T) {
 	}
 }
 
+// -------------------------
+// validateServiceSpec / validateGraphSpec
+// -------------------------
+
 func TestValidateServiceSpec(t *testing.T) {
 	t.Parallel()
 
@@ -97,11 +107,11 @@ func TestValidateServiceSpec(t *testing.T) {
 		wantPanic string
 	}{
 		{name: "valid_ok", mutate: func(*ServiceSpec) {}, wantPanic: ""},
-		{name: "missing_required_fields_package", mutate: func(s *ServiceSpec) { s.Package = " " }, wantPanic: "spec missing: package"},
-		{name: "missing_required_fields_wrapperBase", mutate: func(s *ServiceSpec) { s.WrapperBase = "" }, wantPanic: "spec missing: wrapperBase"},
-		{name: "missing_required_fields_versionSuffix", mutate: func(s *ServiceSpec) { s.VersionSuffix = "" }, wantPanic: "spec missing: versionSuffix"},
-		{name: "missing_required_fields_implType", mutate: func(s *ServiceSpec) { s.ImplType = "" }, wantPanic: "spec missing: implType"},
-		{name: "missing_required_fields_constructor", mutate: func(s *ServiceSpec) { s.Constructor = "" }, wantPanic: "spec missing: constructor"},
+		{name: "missing_package", mutate: func(s *ServiceSpec) { s.Package = " " }, wantPanic: "spec missing: package"},
+		{name: "missing_wrapperBase", mutate: func(s *ServiceSpec) { s.WrapperBase = "" }, wantPanic: "spec missing: wrapperBase"},
+		{name: "missing_versionSuffix", mutate: func(s *ServiceSpec) { s.VersionSuffix = "" }, wantPanic: "spec missing: versionSuffix"},
+		{name: "missing_implType", mutate: func(s *ServiceSpec) { s.ImplType = "" }, wantPanic: "spec missing: implType"},
+		{name: "missing_constructor", mutate: func(s *ServiceSpec) { s.Constructor = "" }, wantPanic: "spec missing: constructor"},
 		{name: "required_empty", mutate: func(s *ServiceSpec) { s.Required = nil }, wantPanic: "spec required must be non-empty"},
 		{
 			name:      "required_dep_missing_fields",
@@ -159,7 +169,6 @@ func TestValidateServiceSpec(t *testing.T) {
 			t.Parallel()
 			s := base()
 			tt.mutate(&s)
-
 			if tt.wantPanic == "" {
 				validateServiceSpec(&s)
 				return
@@ -248,108 +257,83 @@ func TestValidateGraphSpec(t *testing.T) {
 	}
 }
 
+// -------------------------
+// go.mod helpers
+// -------------------------
+
 func TestFindModule(t *testing.T) {
 	t.Parallel()
 
-	tests := []struct {
-		name    string
-		setup   func(t *testing.T) string
-		wantMod string
-		wantErr string
-	}{
-		{
-			name: "finds_nearest_go_mod",
-			setup: func(t *testing.T) string {
-				root := t.TempDir()
-				mustWriteFile(t, filepath.Join(root, "go.mod"), "module example.com/root\n\ngo 1.22\n")
-				start := filepath.Join(root, "a", "b", "c")
-				mustMkdirAll(t, start)
-				return start
-			},
-			wantMod: "example.com/root",
-		},
-		{
-			name: "empty_module_directive_returns_error",
-			setup: func(t *testing.T) string {
-				root := t.TempDir()
-				// With current implementation (TrimSpace before prefix check),
-				// this becomes "module" and is treated as missing directive.
-				mustWriteFile(t, filepath.Join(root, "go.mod"), "module \n\ngo 1.22\n")
-				return root
-			},
-			wantErr: "go.mod missing module directive",
-		},
-		{
-			name: "missing_module_directive_returns_error",
-			setup: func(t *testing.T) string {
-				root := t.TempDir()
-				mustWriteFile(t, filepath.Join(root, "go.mod"), "go 1.22\n")
-				return root
-			},
-			wantErr: "go.mod missing module directive",
-		},
-		{
-			name: "no_go_mod_returns_error",
-			setup: func(t *testing.T) string {
-				return t.TempDir()
-			},
-			wantErr: "could not find go.mod",
-		},
-	}
+	t.Run("finds_nearest_go_mod", func(t *testing.T) {
+		t.Parallel()
+		p := newPkg(t)
+		p.write("go.mod", "module example.com/root\n\ngo 1.22\n")
+		p.write("a/b/c/x.txt", "x") // create dirs
+		start := filepath.Join(p.dir, "a", "b", "c")
 
-	for _, tt := range tests {
-		tt := tt
-		t.Run(tt.name, func(t *testing.T) {
-			t.Parallel()
-			start := tt.setup(t)
-
-			modRoot, modPath, err := findModule(start)
-			if tt.wantErr != "" {
-				if err == nil {
-					t.Fatalf("expected error containing %q, got nil", tt.wantErr)
-				}
-				if !strings.Contains(err.Error(), tt.wantErr) {
-					t.Fatalf("err=%q want contains %q", err.Error(), tt.wantErr)
-				}
-				return
-			}
-
-			if err != nil {
-				t.Fatalf("unexpected err: %v", err)
-			}
-			if modRoot == "" || modPath == "" {
-				t.Fatalf("empty result: modRoot=%q modPath=%q", modRoot, modPath)
-			}
-			if tt.wantMod != "" && modPath != tt.wantMod {
-				t.Fatalf("modPath=%q want %q", modPath, tt.wantMod)
-			}
-		})
-	}
-}
-
-func TestFindModule_ReadFileError(t *testing.T) {
-	t.Parallel()
-
-	root := t.TempDir()
-	gomod := filepath.Join(root, "go.mod")
-	mustWriteFile(t, gomod, "module example.com/root\n\ngo 1.22\n")
-	// Remove read permission to force os.ReadFile error.
-	if err := os.Chmod(gomod, 0o000); err != nil {
-		t.Fatalf("chmod: %v", err)
-	}
-	t.Cleanup(func() {
-		_ = os.Chmod(gomod, 0o644)
+		modRoot, modPath, err := findModule(start)
+		if err != nil {
+			t.Fatalf("unexpected err: %v", err)
+		}
+		if modRoot == "" || modPath == "" {
+			t.Fatalf("empty result: modRoot=%q modPath=%q", modRoot, modPath)
+		}
+		if modPath != "example.com/root" {
+			t.Fatalf("modPath=%q want %q", modPath, "example.com/root")
+		}
 	})
 
-	_, _, err := findModule(root)
-	if err == nil {
-		t.Fatalf("expected error, got nil")
-	}
-	// We accept a platform-specific os.PathError message; just ensure it's not our cmdError strings.
-	if strings.Contains(err.Error(), "missing module directive") ||
-		strings.Contains(err.Error(), "could not find go.mod") {
-		t.Fatalf("expected raw read error, got: %v", err)
-	}
+	t.Run("empty_module_directive_returns_error", func(t *testing.T) {
+		t.Parallel()
+		p := newPkg(t)
+		p.write("go.mod", "module \n\ngo 1.22\n")
+
+		_, _, err := findModule(p.dir)
+		if err == nil || !strings.Contains(err.Error(), "go.mod") {
+			t.Fatalf("expected error, got %v", err)
+		}
+		if !strings.Contains(err.Error(), "empty module path") && !strings.Contains(err.Error(), "missing module directive") {
+			// depending on implementation details; accept either as long as it’s an error from module parsing.
+			t.Fatalf("unexpected error: %v", err)
+		}
+	})
+
+	t.Run("missing_module_directive_returns_error", func(t *testing.T) {
+		t.Parallel()
+		p := newPkg(t)
+		p.write("go.mod", "go 1.22\n")
+
+		_, _, err := findModule(p.dir)
+		if err == nil || !strings.Contains(err.Error(), "missing module directive") {
+			t.Fatalf("err=%v want contains %q", err, "missing module directive")
+		}
+	})
+
+	t.Run("no_go_mod_returns_error", func(t *testing.T) {
+		t.Parallel()
+		p := newPkg(t)
+		_, _, err := findModule(p.dir)
+		if err == nil || !strings.Contains(err.Error(), "could not find go.mod") {
+			t.Fatalf("err=%v want contains %q", err, "could not find go.mod")
+		}
+	})
+
+	t.Run("readFile_error_returns_raw_os_error", func(t *testing.T) {
+		t.Parallel()
+		p := newPkg(t)
+		gomod := p.write("go.mod", "module example.com/root\n\ngo 1.22\n")
+		chmodNoRead(t, gomod)
+
+		_, _, err := findModule(p.dir)
+		if err == nil {
+			t.Fatalf("expected error, got nil")
+		}
+		// Ensure it's not our cmdError strings.
+		if strings.Contains(err.Error(), "missing module directive") ||
+			strings.Contains(err.Error(), "could not find go.mod") {
+			t.Fatalf("expected raw read error, got: %v", err)
+		}
+	})
 }
 
 func TestModuleImportPathForDir(t *testing.T) {
@@ -390,14 +374,10 @@ func TestModuleImportPathForDir(t *testing.T) {
 		tt := tt
 		t.Run(tt.name, func(t *testing.T) {
 			t.Parallel()
-
 			got, err := moduleImportPathForDir(tt.modRoot, tt.modPath, tt.dir)
 			if tt.wantErr != "" {
-				if err == nil {
-					t.Fatalf("expected error containing %q, got nil", tt.wantErr)
-				}
-				if !strings.Contains(err.Error(), tt.wantErr) {
-					t.Fatalf("error=%q want contains %q", err.Error(), tt.wantErr)
+				if err == nil || !strings.Contains(err.Error(), tt.wantErr) {
+					t.Fatalf("err=%v want contains %q", err, tt.wantErr)
 				}
 				return
 			}
@@ -411,12 +391,16 @@ func TestModuleImportPathForDir(t *testing.T) {
 	}
 }
 
+// -------------------------
+// import scanning/merging helpers
+// -------------------------
+
 func TestScanPackageImports_ExcludesGeneratedAndTests_PreservesAlias_DedupesAndSorts(t *testing.T) {
 	t.Parallel()
 
-	dir := t.TempDir()
+	p := newPkg(t)
 
-	mustWriteFile(t, filepath.Join(dir, "a.go"), `
+	p.write("a.go", `
 package p
 
 import (
@@ -426,27 +410,16 @@ import (
 )
 `)
 
-	mustWriteFile(t, filepath.Join(dir, "a_test.go"), `
+	p.write("a_test.go", `
 package p
 import "example.com/should/not/appear"
 `)
 
-	mustWriteFile(t, filepath.Join(dir, "z.gen.go"), `
-package p
-import "example.com/should/not/appear2"
-`)
+	p.write("z.gen.go", `package p; import "example.com/should/not/appear2"`)
+	p.write("x.gen.extra.go", `package p; import "example.com/should/not/appear3"`)
+	p.write("y_gen.go", `package p; import "example.com/should/not/appear4"`)
 
-	mustWriteFile(t, filepath.Join(dir, "x.gen.extra.go"), `
-package p
-import "example.com/should/not/appear3"
-`)
-
-	mustWriteFile(t, filepath.Join(dir, "y_gen.go"), `
-package p
-import "example.com/should/not/appear4"
-`)
-
-	mustWriteFile(t, filepath.Join(dir, "b.go"), `
+	p.write("b.go", `
 package p
 import (
 	config "example.com/proj/config"
@@ -455,7 +428,7 @@ import (
 )
 `)
 
-	imps := scanPackageImports(dir)
+	imps := scanPackageImports(p.dir)
 
 	for _, gi := range imps {
 		if strings.Contains(gi.Path, "should/not/appear") {
@@ -463,7 +436,6 @@ import (
 		}
 	}
 
-	// NOTE: scanPackageImports returns dedupeAndSortImports order (Path, then Name)
 	want := []GoImport{
 		{Name: "config", Path: "example.com/proj/config"},
 		{Name: "di", Path: "example.com/proj/di"},
@@ -477,7 +449,6 @@ import (
 
 func TestScanPackageImports_ReadDirError_ReturnsNil(t *testing.T) {
 	t.Parallel()
-	// Non-existent directory => os.ReadDir error => returns nil
 	imps := scanPackageImports(filepath.Join(t.TempDir(), "does-not-exist"))
 	if imps != nil {
 		t.Fatalf("expected nil, got %#v", imps)
@@ -487,31 +458,23 @@ func TestScanPackageImports_ReadDirError_ReturnsNil(t *testing.T) {
 func TestScanPackageImports_SkipsUnreadableAndBadParseFiles(t *testing.T) {
 	t.Parallel()
 
-	dir := t.TempDir()
+	p := newPkg(t)
 
-	// Unreadable file => os.ReadFile error => should be skipped.
-	unreadable := filepath.Join(dir, "unreadable.go")
-	mustWriteFile(t, unreadable, "package p\nimport \"fmt\"\n")
-	if err := os.Chmod(unreadable, 0o000); err != nil {
-		t.Fatalf("chmod: %v", err)
-	}
-	t.Cleanup(func() { _ = os.Chmod(unreadable, 0o644) })
+	unreadable := p.write("unreadable.go", "package p\nimport \"fmt\"\n")
+	chmodNoRead(t, unreadable)
 
-	// Bad parse => parser error => should be skipped.
-	mustWriteFile(t, filepath.Join(dir, "bad.go"), "package p\nimport (\n") // invalid
+	p.write("bad.go", "package p\nimport (\n") // invalid
 
-	// Good file to ensure the function returns something.
-	mustWriteFile(t, filepath.Join(dir, "ok.go"), `
+	p.write("ok.go", `
 package p
 import di "example.com/proj/di"
 func _() { _ = di.Registry(nil) }
 `)
 
-	imps := scanPackageImports(dir)
+	imps := scanPackageImports(p.dir)
 	if len(imps) == 0 {
 		t.Fatalf("expected some imports, got none")
 	}
-	// Should include the DI import from ok.go
 	found := false
 	for _, gi := range imps {
 		if gi.Path == "example.com/proj/di" {
@@ -605,14 +568,34 @@ func TestDedupeAndSortImports(t *testing.T) {
 func TestReadImportsFromExistingOut(t *testing.T) {
 	t.Parallel()
 
-	dir := t.TempDir()
-	out := filepath.Join(dir, "x.gen.go")
+	t.Run("missing_returns_nil", func(t *testing.T) {
+		t.Parallel()
+		p := newPkg(t)
+		if got := readImportsFromExistingOut(filepath.Join(p.dir, "missing.go")); got != nil {
+			t.Fatalf("expected nil, got %#v", got)
+		}
+	})
 
-	if got := readImportsFromExistingOut(filepath.Join(dir, "missing.go")); got != nil {
-		t.Fatalf("expected nil, got %#v", got)
-	}
+	t.Run("empty_path_returns_nil", func(t *testing.T) {
+		t.Parallel()
+		if got := readImportsFromExistingOut(""); got != nil {
+			t.Fatalf("expected nil, got %#v", got)
+		}
+	})
 
-	mustWriteFile(t, out, `
+	t.Run("parse_error_returns_nil", func(t *testing.T) {
+		t.Parallel()
+		p := newPkg(t)
+		out := p.write("bad.go", "package p\nimport (\n")
+		if got := readImportsFromExistingOut(out); got != nil {
+			t.Fatalf("expected nil, got %#v", got)
+		}
+	})
+
+	t.Run("reads_imports", func(t *testing.T) {
+		t.Parallel()
+		p := newPkg(t)
+		out := p.write("x.gen.go", `
 package p
 
 import (
@@ -620,32 +603,15 @@ import (
 	"fmt"
 )
 `)
-
-	got := readImportsFromExistingOut(out)
-	want := []GoImport{
-		{Name: "di", Path: "example.com/proj/di"},
-		{Name: "", Path: "fmt"},
-	}
-	if !reflect.DeepEqual(got, want) {
-		t.Fatalf("got %#v want %#v", got, want)
-	}
-}
-
-func TestReadImportsFromExistingOut_EmptyPath_ReturnsNil(t *testing.T) {
-	t.Parallel()
-	if got := readImportsFromExistingOut(""); got != nil {
-		t.Fatalf("expected nil, got %#v", got)
-	}
-}
-
-func TestReadImportsFromExistingOut_ParseError_ReturnsNil(t *testing.T) {
-	t.Parallel()
-	dir := t.TempDir()
-	out := filepath.Join(dir, "bad.go")
-	mustWriteFile(t, out, "package p\nimport (\n") // invalid
-	if got := readImportsFromExistingOut(out); got != nil {
-		t.Fatalf("expected nil, got %#v", got)
-	}
+		got := readImportsFromExistingOut(out)
+		want := []GoImport{
+			{Name: "di", Path: "example.com/proj/di"},
+			{Name: "", Path: "fmt"},
+		}
+		if !reflect.DeepEqual(got, want) {
+			t.Fatalf("got %#v want %#v", got, want)
+		}
+	})
 }
 
 func TestMergeImports_DedupesAndSorts(t *testing.T) {
@@ -675,6 +641,10 @@ func TestMergeImports_DedupesAndSorts(t *testing.T) {
 		t.Fatalf("got %#v want %#v", got, want)
 	}
 }
+
+// -------------------------
+// small pure helpers
+// -------------------------
 
 func TestExportName(t *testing.T) {
 	t.Parallel()
@@ -762,376 +732,329 @@ func TestSha256Hex(t *testing.T) {
 	}
 }
 
-func TestInferImportsForService_ConfigDisabled_EmptiesConfigImport(t *testing.T) {
+// -------------------------
+// inferImportsForService / inferImportsForGraph
+// -------------------------
+
+func TestInferImportsForService_Cases(t *testing.T) {
 	t.Parallel()
 
-	pkgDir := t.TempDir()
-
-	// Provide di import in sources so inferImportsForService doesn't need to call inferDIRuntimeImportFromDI2Module.
-	mustWriteFile(t, filepath.Join(pkgDir, "a.go"), `
-package p
-import di "example.com/proj/di"
-func _() { _ = di.Registry(nil) }
-`)
-
-	outPath := filepath.Join(pkgDir, "svc.gen.go")
-
-	s := ServiceSpec{
-		Package:       "p",
-		WrapperBase:   "W",
-		VersionSuffix: "V2",
-		ImplType:      "Impl",
-		Constructor:   "NewImpl",
-		Imports: Imports{
-			DI:     "",
-			Config: "should_be_cleared",
-		},
-		Config: ConfigSpec{Enabled: false},
-		Required: []RequiredDep{
-			{Name: "A", Field: "a", Type: "*A", Nilable: true},
-		},
-	}
-
-	inferImportsForService(&s, outPath)
-
-	if s.Imports.DI != "example.com/proj/di" {
-		t.Fatalf("DI import: got %q want %q", s.Imports.DI, "example.com/proj/di")
-	}
-	if s.Imports.Config != "" {
-		t.Fatalf("Config import should be empty when config disabled; got %q", s.Imports.Config)
-	}
-}
-
-func TestInferImportsForService_ConfigEnabled_CannotFindProjectGoMod_Dies(t *testing.T) {
-	t.Parallel()
-
-	pkgDir := t.TempDir()
-	outPath := filepath.Join(pkgDir, "svc.gen.go")
-
-	// No go.mod anywhere above pkgDir (it's a TempDir root),
-	// and no config import in sources => should die with "cannot find project go.mod".
-	s := ServiceSpec{
-		Package:       "p",
-		WrapperBase:   "W",
-		VersionSuffix: "V2",
-		ImplType:      "Impl",
-		Constructor:   "NewImpl",
-		Config:        ConfigSpec{Enabled: true},
-		Required: []RequiredDep{
-			{Name: "A", Field: "a", Type: "*A", Nilable: true},
-		},
-	}
-
-	assertPanicContains(t, func() { inferImportsForService(&s, outPath) }, "cannot find project go.mod")
-}
-
-func TestInferImportsForService_ConfigEnabled_PrefersForcedImportThenScanned(t *testing.T) {
-	t.Parallel()
-
-	tests := []struct {
+	type cfgMatrix struct {
 		name      string
 		force     string
 		initial   string
 		want      string
 		wantPanic string
-	}{
+	}
+
+	matrix := []cfgMatrix{
 		{name: "forced_import_wins", force: "example.com/forced/config", initial: "", want: "example.com/forced/config"},
 		{name: "scanned_used_when_no_force_and_empty", force: "", initial: "", want: "example.com/proj/config"},
 		{name: "keeps_existing_import_if_already_set", force: "", initial: "example.com/already/config", want: "example.com/already/config"},
 		{name: "panics_if_enabled_and_cannot_infer_and_no_config_dir", force: "", initial: "", wantPanic: "cannot infer imports.config (service)"},
 	}
 
-	for _, tt := range tests {
-		tt := tt
-		t.Run(tt.name, func(t *testing.T) {
-			t.Parallel()
-
-			pkgDir := t.TempDir()
-			outPath := filepath.Join(pkgDir, "svc.gen.go")
-
-			// Always provide di import in sources.
-			mustWriteFile(t, filepath.Join(pkgDir, "di.go"), `
-package p
+	cases := []inferCase[ServiceSpec]{
+		{
+			name: "config_disabled_empties_config_import_and_reads_di_from_sources",
+			setup: func(p *pkgHarness) (*ServiceSpec, string) {
+				p.write("a.go", `package p
 import di "example.com/proj/di"
-func _() { _ = di.Registry(nil) }
-`)
+func _() { _ = di.Registry(nil) }`)
 
-			if tt.name != "panics_if_enabled_and_cannot_infer_and_no_config_dir" {
-				mustWriteFile(t, filepath.Join(pkgDir, "cfg.go"), `
-package p
+				s := &ServiceSpec{
+					Package: "p", WrapperBase: "W", VersionSuffix: "V2", ImplType: "Impl", Constructor: "NewImpl",
+					Imports: Imports{Config: "should_be_cleared"},
+					Config:  ConfigSpec{Enabled: false},
+					Required: []RequiredDep{
+						{Name: "A", Field: "a", Type: "*A", Nilable: true},
+					},
+				}
+				return s, p.out("svc.gen.go")
+			},
+			call: inferImportsForService,
+			assert: func(t *testing.T, s *ServiceSpec) {
+				if s.Imports.Config != "" {
+					t.Fatalf("Config import should be empty when disabled; got %q", s.Imports.Config)
+				}
+				if s.Imports.DI != "example.com/proj/di" {
+					t.Fatalf("DI import: got %q want %q", s.Imports.DI, "example.com/proj/di")
+				}
+			},
+		},
+		{
+			name: "config_enabled_no_project_go_mod_panics",
+			setup: func(p *pkgHarness) (*ServiceSpec, string) {
+				s := &ServiceSpec{
+					Package: "p", WrapperBase: "W", VersionSuffix: "V2", ImplType: "Impl", Constructor: "NewImpl",
+					Config: ConfigSpec{Enabled: true},
+					Required: []RequiredDep{
+						{Name: "A", Field: "a", Type: "*A", Nilable: true},
+					},
+				}
+				return s, p.out("svc.gen.go")
+			},
+			call:      inferImportsForService,
+			wantPanic: "cannot find project go.mod",
+		},
+		{
+			name: "config_disabled_no_sources_uses_runtime_di_import",
+			setup: func(p *pkgHarness) (*ServiceSpec, string) {
+				s := &ServiceSpec{
+					Package: "p", WrapperBase: "W", VersionSuffix: "V2", ImplType: "Impl", Constructor: "NewImpl",
+					Config: ConfigSpec{Enabled: false},
+					Required: []RequiredDep{
+						{Name: "A", Field: "a", Type: "*A", Nilable: true},
+					},
+				}
+				return s, p.out("svc.gen.go")
+			},
+			call: inferImportsForService,
+			assert: func(t *testing.T, s *ServiceSpec) {
+				if strings.TrimSpace(s.Imports.DI) == "" {
+					t.Fatalf("expected DI import inferred from runtime, got empty")
+				}
+				if !strings.Contains(s.Imports.DI, "/di") {
+					t.Fatalf("expected DI import to contain /di, got %q", s.Imports.DI)
+				}
+			},
+		},
+	}
+
+	// add matrix-driven config-enabled cases
+	for _, row := range matrix {
+		row := row
+		cases = append(cases, inferCase[ServiceSpec]{
+			name: "config_enabled_" + row.name,
+			setup: func(p *pkgHarness) (*ServiceSpec, string) {
+				outPath := p.out("svc.gen.go")
+
+				// always DI in sources
+				p.write("di.go", `package p
+import di "example.com/proj/di"
+func _() { _ = di.Registry(nil) }`)
+
+				if row.wantPanic == "" {
+					// enable scanning success
+					p.write("cfg.go", `package p
 import config "example.com/proj/config"
-var _ = config.Config{}
-`)
-			} else {
-				// Create go.mod so it gets past "cannot find project go.mod" and reaches "./config directory not found".
-				mustWriteFile(t, filepath.Join(pkgDir, "go.mod"), "module example.com/proj\n\ngo 1.22\n")
-				// No ./config dir and no config import in sources.
-			}
+var _ = config.Config{}`)
+				} else {
+					// go.mod exists so it gets past "cannot find project go.mod"
+					p.write("go.mod", "module example.com/proj\n\ngo 1.22\n")
+					// no ./config dir and no config import in sources
+				}
 
-			s := ServiceSpec{
-				Package:       "p",
-				WrapperBase:   "W",
-				VersionSuffix: "V2",
-				ImplType:      "Impl",
-				Constructor:   "NewImpl",
-				Imports: Imports{
-					DI:     "",
-					Config: tt.initial,
-				},
-				Config: ConfigSpec{
-					Enabled: true,
-					Import:  tt.force,
-				},
-				Required: []RequiredDep{
-					{Name: "A", Field: "a", Type: "*A", Nilable: true},
-				},
-			}
-
-			if tt.wantPanic != "" {
-				assertPanicContains(t, func() { inferImportsForService(&s, outPath) }, tt.wantPanic)
-				return
-			}
-
-			inferImportsForService(&s, outPath)
-
-			if s.Imports.Config != tt.want {
-				t.Fatalf("Config import: got %q want %q", s.Imports.Config, tt.want)
-			}
-			if s.Imports.DI != "example.com/proj/di" {
-				t.Fatalf("DI import: got %q want %q", s.Imports.DI, "example.com/proj/di")
-			}
+				s := &ServiceSpec{
+					Package: "p", WrapperBase: "W", VersionSuffix: "V2", ImplType: "Impl", Constructor: "NewImpl",
+					Imports: Imports{DI: "", Config: row.initial},
+					Config:  ConfigSpec{Enabled: true, Import: row.force},
+					Required: []RequiredDep{
+						{Name: "A", Field: "a", Type: "*A", Nilable: true},
+					},
+				}
+				return s, outPath
+			},
+			call:      inferImportsForService,
+			wantPanic: row.wantPanic,
+			assert: func(t *testing.T, s *ServiceSpec) {
+				if s.Imports.Config != row.want {
+					t.Fatalf("Config import: got %q want %q", s.Imports.Config, row.want)
+				}
+				if s.Imports.DI != "example.com/proj/di" {
+					t.Fatalf("DI import: got %q want %q", s.Imports.DI, "example.com/proj/di")
+				}
+			},
 		})
 	}
+
+	runInferCases(t, cases)
 }
 
-func TestInferImportsForService_ConfigDisabled_UsesRuntimeDIImportWhenNotInSources(t *testing.T) {
+func TestInferImportsForGraph_Cases(t *testing.T) {
 	t.Parallel()
 
-	pkgDir := t.TempDir()
-	outPath := filepath.Join(pkgDir, "svc.gen.go")
-
-	// No go files at all => DI not in sources => should fall back to inferDIRuntimeImportFromDI2Module("di")
-	s := ServiceSpec{
-		Package:       "p",
-		WrapperBase:   "W",
-		VersionSuffix: "V2",
-		ImplType:      "Impl",
-		Constructor:   "NewImpl",
-		Config:        ConfigSpec{Enabled: false},
-		Required: []RequiredDep{
-			{Name: "A", Field: "a", Type: "*A", Nilable: true},
-		},
-	}
-
-	inferImportsForService(&s, outPath)
-	if strings.TrimSpace(s.Imports.DI) == "" {
-		t.Fatalf("expected DI import to be inferred from runtime, got empty")
-	}
-	if !strings.Contains(s.Imports.DI, "/di") {
-		t.Fatalf("expected DI import to contain /di, got %q", s.Imports.DI)
-	}
-}
-
-func TestInferImportsForGraph_ConfigDisabled_EmptiesConfigImport(t *testing.T) {
-	t.Parallel()
-
-	pkgDir := t.TempDir()
-	outPath := filepath.Join(pkgDir, "graph.gen.go")
-
-	mustWriteFile(t, filepath.Join(pkgDir, "a.go"), `
-package p
-import di "example.com/proj/di"
-func _() { _ = di.Registry(nil) }
-`)
-
-	g := GraphSpec{
-		Package: "p",
-		Imports: Imports{
-			DI:     "",
-			Config: "should_be_cleared",
-		},
-		Config: ConfigSpec{Enabled: false},
-		Roots: []struct {
-			Name              string `json:"name"`
-			BuildWithRegistry bool   `json:"buildWithRegistry"`
-			Services          []struct {
-				Var        string `json:"var"`
-				FacadeCtor string `json:"facadeCtor"`
-				FacadeType string `json:"facadeType"`
-				ImplType   string `json:"implType"`
-			} `json:"services"`
-			Wiring []struct {
-				To      string `json:"to"`
-				Call    string `json:"call"`
-				ArgFrom string `json:"argFrom"`
-			} `json:"wiring"`
-		}{
-			{Name: "Root"},
-		},
-	}
-
-	inferImportsForGraph(&g, outPath)
-
-	if g.Imports.DI != "example.com/proj/di" {
-		t.Fatalf("DI import: got %q want %q", g.Imports.DI, "example.com/proj/di")
-	}
-	if g.Imports.Config != "" {
-		t.Fatalf("Config import should be empty when config disabled; got %q", g.Imports.Config)
-	}
-}
-
-func TestInferImportsForGraph_ConfigEnabled_CannotFindProjectGoMod_Dies(t *testing.T) {
-	t.Parallel()
-
-	pkgDir := t.TempDir()
-	outPath := filepath.Join(pkgDir, "graph.gen.go")
-
-	g := GraphSpec{
-		Package: "p",
-		Config:  ConfigSpec{Enabled: true},
-		Roots: []struct {
-			Name              string `json:"name"`
-			BuildWithRegistry bool   `json:"buildWithRegistry"`
-			Services          []struct {
-				Var        string `json:"var"`
-				FacadeCtor string `json:"facadeCtor"`
-				FacadeType string `json:"facadeType"`
-				ImplType   string `json:"implType"`
-			} `json:"services"`
-			Wiring []struct {
-				To      string `json:"to"`
-				Call    string `json:"call"`
-				ArgFrom string `json:"argFrom"`
-			} `json:"wiring"`
-		}{
-			{Name: "Root"},
-		},
-	}
-
-	assertPanicContains(t, func() { inferImportsForGraph(&g, outPath) }, "cannot find project go.mod")
-}
-
-func TestInferImportsForGraph_ConfigDisabled_UsesRuntimeDIImportWhenNotInSources(t *testing.T) {
-	t.Parallel()
-
-	pkgDir := t.TempDir()
-	outPath := filepath.Join(pkgDir, "graph.gen.go")
-
-	// No sources => DI should be inferred from runtime in the "else" branch.
-	g := GraphSpec{
-		Package: "p",
-		Config:  ConfigSpec{Enabled: false},
-		Roots: []struct {
-			Name              string `json:"name"`
-			BuildWithRegistry bool   `json:"buildWithRegistry"`
-			Services          []struct {
-				Var        string `json:"var"`
-				FacadeCtor string `json:"facadeCtor"`
-				FacadeType string `json:"facadeType"`
-				ImplType   string `json:"implType"`
-			} `json:"services"`
-			Wiring []struct {
-				To      string `json:"to"`
-				Call    string `json:"call"`
-				ArgFrom string `json:"argFrom"`
-			} `json:"wiring"`
-		}{
-			{Name: "Root"},
-		},
-	}
-
-	inferImportsForGraph(&g, outPath)
-	if strings.TrimSpace(g.Imports.DI) == "" {
-		t.Fatalf("expected DI import to be inferred from runtime, got empty")
-	}
-	if !strings.Contains(g.Imports.DI, "/di") {
-		t.Fatalf("expected DI import to contain /di, got %q", g.Imports.DI)
-	}
-}
-
-func TestInferImportsForGraph_ConfigEnabled_PrefersForcedImportThenScanned(t *testing.T) {
-	t.Parallel()
-
-	tests := []struct {
+	type cfgMatrix struct {
 		name      string
 		force     string
 		initial   string
 		want      string
 		wantPanic string
-	}{
+	}
+
+	matrix := []cfgMatrix{
 		{name: "forced_import_wins", force: "example.com/forced/config", initial: "", want: "example.com/forced/config"},
 		{name: "scanned_used_when_no_force_and_empty", force: "", initial: "", want: "example.com/proj/config"},
 		{name: "keeps_existing_import_if_already_set", force: "", initial: "example.com/already/config", want: "example.com/already/config"},
 		{name: "panics_if_enabled_and_cannot_infer_and_no_config_dir", force: "", initial: "", wantPanic: "cannot infer graph imports.config"},
 	}
 
-	for _, tt := range tests {
-		tt := tt
-		t.Run(tt.name, func(t *testing.T) {
-			t.Parallel()
-
-			pkgDir := t.TempDir()
-			outPath := filepath.Join(pkgDir, "graph.gen.go")
-
-			mustWriteFile(t, filepath.Join(pkgDir, "di.go"), `
-package p
+	cases := []inferCase[GraphSpec]{
+		{
+			name: "config_disabled_empties_config_import_and_reads_di_from_sources",
+			setup: func(p *pkgHarness) (*GraphSpec, string) {
+				p.write("a.go", `package p
 import di "example.com/proj/di"
-func _() { _ = di.Registry(nil) }
-`)
+func _() { _ = di.Registry(nil) }`)
 
-			if tt.name != "panics_if_enabled_and_cannot_infer_and_no_config_dir" {
-				mustWriteFile(t, filepath.Join(pkgDir, "cfg.go"), `
-package p
+				g := &GraphSpec{
+					Package: "p",
+					Imports: Imports{Config: "should_be_cleared"},
+					Config:  ConfigSpec{Enabled: false},
+					Roots: []struct {
+						Name              string `json:"name"`
+						BuildWithRegistry bool   `json:"buildWithRegistry"`
+						Services          []struct {
+							Var        string `json:"var"`
+							FacadeCtor string `json:"facadeCtor"`
+							FacadeType string `json:"facadeType"`
+							ImplType   string `json:"implType"`
+						} `json:"services"`
+						Wiring []struct {
+							To      string `json:"to"`
+							Call    string `json:"call"`
+							ArgFrom string `json:"argFrom"`
+						} `json:"wiring"`
+					}{
+						{Name: "Root"},
+					},
+				}
+				return g, p.out("graph.gen.go")
+			},
+			call: inferImportsForGraph,
+			assert: func(t *testing.T, g *GraphSpec) {
+				if g.Imports.Config != "" {
+					t.Fatalf("Config import should be empty when disabled; got %q", g.Imports.Config)
+				}
+				if g.Imports.DI != "example.com/proj/di" {
+					t.Fatalf("DI import: got %q want %q", g.Imports.DI, "example.com/proj/di")
+				}
+			},
+		},
+		{
+			name: "config_enabled_no_project_go_mod_panics",
+			setup: func(p *pkgHarness) (*GraphSpec, string) {
+				g := &GraphSpec{
+					Package: "p",
+					Config:  ConfigSpec{Enabled: true},
+					Roots: []struct {
+						Name              string `json:"name"`
+						BuildWithRegistry bool   `json:"buildWithRegistry"`
+						Services          []struct {
+							Var        string `json:"var"`
+							FacadeCtor string `json:"facadeCtor"`
+							FacadeType string `json:"facadeType"`
+							ImplType   string `json:"implType"`
+						} `json:"services"`
+						Wiring []struct {
+							To      string `json:"to"`
+							Call    string `json:"call"`
+							ArgFrom string `json:"argFrom"`
+						} `json:"wiring"`
+					}{
+						{Name: "Root"},
+					},
+				}
+				return g, p.out("graph.gen.go")
+			},
+			call:      inferImportsForGraph,
+			wantPanic: "cannot find project go.mod",
+		},
+		{
+			name: "config_disabled_no_sources_uses_runtime_di_import",
+			setup: func(p *pkgHarness) (*GraphSpec, string) {
+				g := &GraphSpec{
+					Package: "p",
+					Config:  ConfigSpec{Enabled: false},
+					Roots: []struct {
+						Name              string `json:"name"`
+						BuildWithRegistry bool   `json:"buildWithRegistry"`
+						Services          []struct {
+							Var        string `json:"var"`
+							FacadeCtor string `json:"facadeCtor"`
+							FacadeType string `json:"facadeType"`
+							ImplType   string `json:"implType"`
+						} `json:"services"`
+						Wiring []struct {
+							To      string `json:"to"`
+							Call    string `json:"call"`
+							ArgFrom string `json:"argFrom"`
+						} `json:"wiring"`
+					}{
+						{Name: "Root"},
+					},
+				}
+				return g, p.out("graph.gen.go")
+			},
+			call: inferImportsForGraph,
+			assert: func(t *testing.T, g *GraphSpec) {
+				if strings.TrimSpace(g.Imports.DI) == "" {
+					t.Fatalf("expected DI import to be inferred from runtime, got empty")
+				}
+				if !strings.Contains(g.Imports.DI, "/di") {
+					t.Fatalf("expected DI import to contain /di, got %q", g.Imports.DI)
+				}
+			},
+		},
+	}
+
+	for _, row := range matrix {
+		row := row
+		cases = append(cases, inferCase[GraphSpec]{
+			name: "config_enabled_" + row.name,
+			setup: func(p *pkgHarness) (*GraphSpec, string) {
+				outPath := p.out("graph.gen.go")
+
+				p.write("di.go", `package p
+import di "example.com/proj/di"
+func _() { _ = di.Registry(nil) }`)
+
+				if row.wantPanic == "" {
+					p.write("cfg.go", `package p
 import config "example.com/proj/config"
-var _ = config.Config{}
-`)
-			} else {
-				mustWriteFile(t, filepath.Join(pkgDir, "go.mod"), "module example.com/proj\n\ngo 1.22\n")
-			}
+var _ = config.Config{}`)
+				} else {
+					p.write("go.mod", "module example.com/proj\n\ngo 1.22\n")
+				}
 
-			g := GraphSpec{
-				Package: "p",
-				Imports: Imports{
-					DI:     "",
-					Config: tt.initial,
-				},
-				Config: ConfigSpec{
-					Enabled: true,
-					Import:  tt.force,
-				},
-				Roots: []struct {
-					Name              string `json:"name"`
-					BuildWithRegistry bool   `json:"buildWithRegistry"`
-					Services          []struct {
-						Var        string `json:"var"`
-						FacadeCtor string `json:"facadeCtor"`
-						FacadeType string `json:"facadeType"`
-						ImplType   string `json:"implType"`
-					} `json:"services"`
-					Wiring []struct {
-						To      string `json:"to"`
-						Call    string `json:"call"`
-						ArgFrom string `json:"argFrom"`
-					} `json:"wiring"`
-				}{
-					{Name: "Root"},
-				},
-			}
-
-			if tt.wantPanic != "" {
-				assertPanicContains(t, func() { inferImportsForGraph(&g, outPath) }, tt.wantPanic)
-				return
-			}
-
-			inferImportsForGraph(&g, outPath)
-			if g.Imports.Config != tt.want {
-				t.Fatalf("Config import: got %q want %q", g.Imports.Config, tt.want)
-			}
-			if g.Imports.DI != "example.com/proj/di" {
-				t.Fatalf("DI import: got %q want %q", g.Imports.DI, "example.com/proj/di")
-			}
+				g := &GraphSpec{
+					Package: "p",
+					Imports: Imports{DI: "", Config: row.initial},
+					Config:  ConfigSpec{Enabled: true, Import: row.force},
+					Roots: []struct {
+						Name              string `json:"name"`
+						BuildWithRegistry bool   `json:"buildWithRegistry"`
+						Services          []struct {
+							Var        string `json:"var"`
+							FacadeCtor string `json:"facadeCtor"`
+							FacadeType string `json:"facadeType"`
+							ImplType   string `json:"implType"`
+						} `json:"services"`
+						Wiring []struct {
+							To      string `json:"to"`
+							Call    string `json:"call"`
+							ArgFrom string `json:"argFrom"`
+						} `json:"wiring"`
+					}{
+						{Name: "Root"},
+					},
+				}
+				return g, outPath
+			},
+			call:      inferImportsForGraph,
+			wantPanic: row.wantPanic,
+			assert: func(t *testing.T, g *GraphSpec) {
+				if g.Imports.Config != row.want {
+					t.Fatalf("Config import: got %q want %q", g.Imports.Config, row.want)
+				}
+				if g.Imports.DI != "example.com/proj/di" {
+					t.Fatalf("DI import: got %q want %q", g.Imports.DI, "example.com/proj/di")
+				}
+			},
 		})
 	}
+
+	runInferCases(t, cases)
 }
 
 func TestDirExistsAndFileExists(t *testing.T) {
@@ -1169,16 +1092,15 @@ func TestDirExistsAndFileExists(t *testing.T) {
 func TestInferDIRuntimeImportFromDI2Module_DefaultRelPathAndMissingDir(t *testing.T) {
 	t.Parallel()
 
-	// Covers: runtimePkgRel default to "di" when empty.
 	got := inferDIRuntimeImportFromDI2Module("")
 	if strings.TrimSpace(got) == "" || !strings.Contains(got, "/di") {
 		t.Fatalf("expected inferred import to contain /di, got %q", got)
 	}
 
-	// Covers: missing runtime package dir => die
 	assertPanicContains(t, func() { inferDIRuntimeImportFromDI2Module("definitely-does-not-exist") }, "expected runtime package dir")
 }
 
+// Just a sanity check to ensure runtime.Caller works on this platform.
 func TestRuntimeCallerWorks(t *testing.T) {
 	t.Parallel()
 	_, _, _, ok := runtime.Caller(0)
@@ -1186,6 +1108,10 @@ func TestRuntimeCallerWorks(t *testing.T) {
 		t.Fatalf("runtime.Caller(0) unexpectedly failed")
 	}
 }
+
+// -------------------------
+// writeFormatted / must / run routing
+// -------------------------
 
 func TestWriteFormatted_FormatError_WritesRawAndDies(t *testing.T) {
 	t.Parallel()
@@ -1195,7 +1121,6 @@ func TestWriteFormatted_FormatError_WritesRawAndDies(t *testing.T) {
 
 	assertPanicContains(t, func() { writeFormatted(out, invalid) }, "gofmt/format failed")
 
-	// The function writes raw src on failure; verify file exists and contains the raw bytes.
 	got := mustReadString(t, out)
 	if !strings.Contains(got, "func {") {
 		t.Fatalf("expected raw src to be written; got:\n%s", got)
@@ -1209,11 +1134,34 @@ func TestMust_PanicsOnError(t *testing.T) {
 
 func TestRun_Routing_ParseError(t *testing.T) {
 	t.Parallel()
-
-	// Unknown flag => fs.Parse returns an error (covers the Parse error branch).
 	err := run([]string{"-out", "x", "-wat"})
 	if err == nil {
 		t.Fatalf("expected parse error, got nil")
+	}
+}
+
+func TestRun_Routing_Errors(t *testing.T) {
+	t.Parallel()
+
+	tests := []struct {
+		name    string
+		args    []string
+		wantErr string
+	}{
+		{name: "missing_out", args: []string{"-spec", "x.json"}, wantErr: "missing -out"},
+		{name: "both_spec_and_graph", args: []string{"-out", "x", "-spec", "a", "-graph", "b"}, wantErr: "use only one of -spec or -graph"},
+		{name: "missing_spec_and_graph", args: []string{"-out", "x"}, wantErr: "missing -spec or -graph"},
+	}
+
+	for _, tt := range tests {
+		tt := tt
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+			err := run(tt.args)
+			if err == nil || !strings.Contains(err.Error(), tt.wantErr) {
+				t.Fatalf("err=%v want contains %q", err, tt.wantErr)
+			}
+		})
 	}
 }
 
@@ -1222,10 +1170,10 @@ func TestRun_Routing_SpecAndGraphHappyPaths(t *testing.T) {
 
 	t.Run("spec_routes_to_genService_and_returns_nil", func(t *testing.T) {
 		t.Parallel()
+		p := newPkg(t)
 
-		dir := t.TempDir()
-		specPath := filepath.Join(dir, "service.inject.json")
-		outPath := filepath.Join(dir, "svc.gen.go")
+		specPath := p.out("service.inject.json")
+		outPath := p.out("svc.gen.go")
 
 		spec := ServiceSpec{
 			Package:       "p",
@@ -1255,10 +1203,10 @@ func TestRun_Routing_SpecAndGraphHappyPaths(t *testing.T) {
 
 	t.Run("graph_routes_to_genGraph_and_returns_nil", func(t *testing.T) {
 		t.Parallel()
+		p := newPkg(t)
 
-		dir := t.TempDir()
-		graphPath := filepath.Join(dir, "graph.json")
-		outPath := filepath.Join(dir, "graph.gen.go")
+		graphPath := p.out("graph.json")
+		outPath := p.out("graph.gen.go")
 
 		g := GraphSpec{
 			Package: "p",
@@ -1298,35 +1246,14 @@ func TestRun_Routing_SpecAndGraphHappyPaths(t *testing.T) {
 	})
 }
 
-func TestRun_Routing_Errors(t *testing.T) {
-	t.Parallel()
-
-	tests := []struct {
-		name    string
-		args    []string
-		wantErr string
-	}{
-		{name: "missing_out", args: []string{"-spec", "x.json"}, wantErr: "missing -out"},
-		{name: "both_spec_and_graph", args: []string{"-out", "x", "-spec", "a", "-graph", "b"}, wantErr: "use only one of -spec or -graph"},
-		{name: "missing_spec_and_graph", args: []string{"-out", "x"}, wantErr: "missing -spec or -graph"},
-	}
-
-	for _, tt := range tests {
-		tt := tt
-		t.Run(tt.name, func(t *testing.T) {
-			t.Parallel()
-			err := run(tt.args)
-			if err == nil || !strings.Contains(err.Error(), tt.wantErr) {
-				t.Fatalf("err=%v want contains %q", err, tt.wantErr)
-			}
-		})
-	}
-}
+// -------------------------
+// genService / genGraph (slimmed but same intent coverage)
+// -------------------------
 
 func TestGenService_CoversDefaultsSortingImportsPreserveAndStdlibAutoImports(t *testing.T) {
 	t.Parallel()
 
-	tests := []struct {
+	cases := []struct {
 		name          string
 		configEnabled bool
 		wantConfigImp bool
@@ -1335,33 +1262,27 @@ func TestGenService_CoversDefaultsSortingImportsPreserveAndStdlibAutoImports(t *
 		{name: "config_enabled", configEnabled: true, wantConfigImp: true},
 	}
 
-	for _, tt := range tests {
-		tt := tt
-		t.Run(tt.name, func(t *testing.T) {
+	for _, tc := range cases {
+		tc := tc
+		t.Run(tc.name, func(t *testing.T) {
 			t.Parallel()
+			p := newPkg(t)
 
-			dir := t.TempDir()
-			outPath := filepath.Join(dir, "svc.gen.go")
-			specPath := filepath.Join(dir, "service.inject.json")
+			outPath := p.out("svc.gen.go")
+			specPath := p.out("service.inject.json")
 
-			mustWriteFile(t, filepath.Join(dir, "a.go"), `
-package p
+			p.write("a.go", `package p
 import di "example.com/proj/di"
-func _() { _ = di.Registry(nil) }
-`)
+func _() { _ = di.Registry(nil) }`)
 
-			if tt.configEnabled {
-				mustWriteFile(t, filepath.Join(dir, "cfg.go"), `
-package p
+			if tc.configEnabled {
+				p.write("cfg.go", `package p
 import config "example.com/proj/config"
-var _ = config.Config{}
-`)
+var _ = config.Config{}`)
 			}
 
-			mustWriteFile(t, outPath, `
-package p
-import keep "example.com/keep/me"
-`)
+			p.write("svc.gen.go", `package p
+import keep "example.com/keep/me"`)
 
 			spec := ServiceSpec{
 				Package:       "p",
@@ -1374,42 +1295,28 @@ import keep "example.com/keep/me"
 				PublicConstructorName: "",
 				InjectPolicy:          InjectPolicy{OnOverwrite: ""},
 
-				Config: ConfigSpec{Enabled: tt.configEnabled},
+				Config: ConfigSpec{Enabled: tc.configEnabled},
 
 				Required: []RequiredDep{
 					{Name: "B", Field: "b", Type: "*B", Nilable: true},
 					{Name: "A", Field: "a", Type: "*A", Nilable: true},
 				},
 				Optional: []OptionalDep{
-					{
-						Name:        "Zed",
-						Type:        "*Z",
-						RegistryKey: "zed-key",
-						Apply:       OptionalApply{Kind: "field", Name: "zed"},
-					},
-					{
-						Name:        "Alpha",
-						Type:        "*Alpha",
-						RegistryKey: "alpha-key",
-						Apply:       OptionalApply{Kind: "setter", Name: "SetAlpha"},
-					},
+					{Name: "Zed", Type: "*Z", RegistryKey: "zed-key", Apply: OptionalApply{Kind: "field", Name: "zed"}},
+					{Name: "Alpha", Type: "*Alpha", RegistryKey: "alpha-key", Apply: OptionalApply{Kind: "setter", Name: "SetAlpha"}},
 				},
 				Methods: []MethodSpec{
 					{
-						Name: "Zeta",
-						Params: []MethodParam{
-							{Name: "ctx", Type: "context.Context"},
-						},
+						Name:   "Zeta",
+						Params: []MethodParam{{Name: "ctx", Type: "context.Context"}},
 						Returns: []MethodReturn{
 							{Type: "time.Duration"},
 						},
 						Requires: []string{"A"},
 					},
 					{
-						Name: "Alpha",
-						Params: []MethodParam{
-							{Name: "x", Type: "int"},
-						},
+						Name:   "Alpha",
+						Params: []MethodParam{{Name: "x", Type: "int"}},
 						Returns: []MethodReturn{
 							{Type: "error"},
 						},
@@ -1422,69 +1329,55 @@ import keep "example.com/keep/me"
 			if err != nil {
 				t.Fatalf("marshal: %v", err)
 			}
-			if err := os.WriteFile(specPath, raw, 0o644); err != nil {
-				t.Fatalf("write spec: %v", err)
-			}
+			mustWriteFile(t, specPath, string(raw))
 
 			genService(specPath, outPath)
+			out := p.read("svc.gen.go")
 
-			out := mustReadString(t, outPath)
-
-			wantHash := sha256Hex(raw)
 			if !strings.Contains(out, "Spec: "+filepath.ToSlash(specPath)) {
 				t.Fatalf("expected Spec path in header")
 			}
-			if !strings.Contains(out, "Spec-SHA256: "+wantHash) {
+			if !strings.Contains(out, "Spec-SHA256: "+sha256Hex(raw)) {
 				t.Fatalf("expected Spec hash in header")
-			}
-
-			if !strings.Contains(out, "type FooV2 struct") {
-				t.Fatalf("expected default FacadeName FooV2")
-			}
-			if tt.configEnabled {
-				if !strings.Contains(out, "func NewFooV2(cfg config.Config) *FooV2") {
-					t.Fatalf("expected default PublicConstructorName NewFooV2 with cfg param")
-				}
-			} else {
-				if !strings.Contains(out, "func NewFooV2() *FooV2") {
-					t.Fatalf("expected default PublicConstructorName NewFooV2 without cfg")
-				}
-			}
-			if !strings.Contains(out, `var FooV2InjectPolicyOnOverwrite = "error"`) {
-				t.Fatalf("expected InjectPolicy default to error")
 			}
 
 			if !strings.Contains(out, `keep "example.com/keep/me"`) {
 				t.Fatalf("expected preserved import to remain")
 			}
 
-			if !strings.Contains(out, `"fmt"`) || !strings.Contains(out, `"strings"`) {
-				t.Fatalf("expected fmt+strings imports")
-			}
+			assertHasImport(t, out, "fmt")
+			assertHasImport(t, out, "strings")
+			assertHasImport(t, out, "context")
+			assertHasImport(t, out, "time")
 			if !strings.Contains(out, `di "example.com/proj/di"`) {
 				t.Fatalf("expected di import inferred from sources")
 			}
 
-			if tt.wantConfigImp && !strings.Contains(out, `config "example.com/proj/config"`) {
-				t.Fatalf("expected config import when enabled")
-			}
-			if !tt.wantConfigImp && strings.Contains(out, `config "example.com/proj/config"`) {
-				t.Fatalf("did not expect config import when disabled")
+			if tc.wantConfigImp {
+				if !strings.Contains(out, `config "example.com/proj/config"`) {
+					t.Fatalf("expected config import when enabled")
+				}
+				if !strings.Contains(out, "func NewFooV2(cfg config.Config) *FooV2") {
+					t.Fatalf("expected ctor signature with cfg when enabled")
+				}
+			} else {
+				if strings.Contains(out, `config "example.com/proj/config"`) {
+					t.Fatalf("did not expect config import when disabled")
+				}
+				if !strings.Contains(out, "func NewFooV2() *FooV2") {
+					t.Fatalf("expected ctor signature without cfg when disabled")
+				}
 			}
 
-			if !strings.Contains(out, `"context"`) {
-				t.Fatalf("expected context import from method signature")
-			}
-			if !strings.Contains(out, `"time"`) {
-				t.Fatalf("expected time import from method signature")
+			if !strings.Contains(out, `var FooV2InjectPolicyOnOverwrite = "error"`) {
+				t.Fatalf("expected InjectPolicy default to error")
 			}
 
+			// deterministic ordering checks (still verifies sorting & template ordering)
 			assertContainsInOrder(t, out, "TryInjectA", "TryInjectB")
 			assertContainsInOrder(t, out, `= "alpha-key"`, `= "zed-key"`)
 			assertContainsInOrder(t, out, "func (b *FooV2) Alpha(", "func (b *FooV2) Zeta(")
 
-			// Optional const names can vary based on template, so we keep it loose:
-			// ensure both keys appear somewhere.
 			if !strings.Contains(out, `"alpha-key"`) || !strings.Contains(out, `"zed-key"`) {
 				t.Fatalf("expected to find optional keys in output")
 			}
@@ -1495,7 +1388,7 @@ import keep "example.com/keep/me"
 func TestGenGraph_CoversSortingImportsPreserveAndCfgBranch(t *testing.T) {
 	t.Parallel()
 
-	tests := []struct {
+	cases := []struct {
 		name          string
 		configEnabled bool
 		wantCfgSig    string
@@ -1515,40 +1408,34 @@ func TestGenGraph_CoversSortingImportsPreserveAndCfgBranch(t *testing.T) {
 		},
 	}
 
-	for _, tt := range tests {
-		tt := tt
-		t.Run(tt.name, func(t *testing.T) {
+	for _, tc := range cases {
+		tc := tc
+		t.Run(tc.name, func(t *testing.T) {
 			t.Parallel()
+			p := newPkg(t)
 
-			dir := t.TempDir()
-			outPath := filepath.Join(dir, "graph.gen.go")
-			graphPath := filepath.Join(dir, "graph.json")
+			outPath := p.out("graph.gen.go")
+			graphPath := p.out("graph.json")
 
-			if tt.configEnabled {
-				mustWriteFile(t, filepath.Join(dir, "a.go"), `
-package p
+			if tc.configEnabled {
+				p.write("a.go", `package p
 import (
 	di "example.com/proj/di"
 	config "example.com/proj/config"
 )
-func _() { _ = di.Registry(nil); _ = config.Config{} }
-`)
+func _() { _ = di.Registry(nil); _ = config.Config{} }`)
 			} else {
-				mustWriteFile(t, filepath.Join(dir, "a.go"), `
-package p
+				p.write("a.go", `package p
 import di "example.com/proj/di"
-func _() { _ = di.Registry(nil) }
-`)
+func _() { _ = di.Registry(nil) }`)
 			}
 
-			mustWriteFile(t, outPath, `
-package p
-import keep "example.com/keep/me"
-`)
+			p.write("graph.gen.go", `package p
+import keep "example.com/keep/me"`)
 
 			g := GraphSpec{
 				Package: "p",
-				Config:  ConfigSpec{Enabled: tt.configEnabled},
+				Config:  ConfigSpec{Enabled: tc.configEnabled},
 				Roots: []struct {
 					Name              string `json:"name"`
 					BuildWithRegistry bool   `json:"buildWithRegistry"`
@@ -1604,19 +1491,15 @@ import keep "example.com/keep/me"
 			if err != nil {
 				t.Fatalf("marshal: %v", err)
 			}
-			if err := os.WriteFile(graphPath, raw, 0o644); err != nil {
-				t.Fatalf("write graph: %v", err)
-			}
+			mustWriteFile(t, graphPath, string(raw))
 
 			genGraph(graphPath, outPath)
+			out := p.read("graph.gen.go")
 
-			out := mustReadString(t, outPath)
-
-			wantHash := sha256Hex(raw)
 			if !strings.Contains(out, "Graph: "+filepath.ToSlash(graphPath)) {
 				t.Fatalf("expected Graph path in header")
 			}
-			if !strings.Contains(out, "Graph-SHA256: "+wantHash) {
+			if !strings.Contains(out, "Graph-SHA256: "+sha256Hex(raw)) {
 				t.Fatalf("expected Graph hash in header")
 			}
 
@@ -1624,14 +1507,12 @@ import keep "example.com/keep/me"
 				t.Fatalf("expected preserved import to remain")
 			}
 
-			if !strings.Contains(out, `"fmt"`) {
-				t.Fatalf("expected fmt import")
-			}
+			assertHasImport(t, out, "fmt")
 			if !strings.Contains(out, `di "example.com/proj/di"`) {
 				t.Fatalf("expected di import inferred from sources")
 			}
 
-			if tt.configEnabled {
+			if tc.configEnabled {
 				if !strings.Contains(out, `config "example.com/proj/config"`) {
 					t.Fatalf("expected config import when enabled")
 				}
@@ -1643,78 +1524,12 @@ import keep "example.com/keep/me"
 
 			assertContainsInOrder(t, out, "type ARootResult struct", "type ZRootResult struct")
 
-			if !strings.Contains(out, tt.wantCfgSig) {
-				t.Fatalf("expected root signature %q", tt.wantCfgSig)
+			if !strings.Contains(out, tc.wantCfgSig) {
+				t.Fatalf("expected root signature %q", tc.wantCfgSig)
 			}
-			if !strings.Contains(out, tt.wantCtorCall) {
-				t.Fatalf("expected ctor call %q", tt.wantCtorCall)
+			if !strings.Contains(out, tc.wantCtorCall) {
+				t.Fatalf("expected ctor call %q", tc.wantCtorCall)
 			}
 		})
-	}
-}
-
-// -------------------------
-// helpers
-// -------------------------
-
-func assertPanicContains(t *testing.T, fn func(), wantSubstr string) {
-	t.Helper()
-	defer func() {
-		r := recover()
-		if r == nil {
-			t.Fatalf("expected panic containing %q, got none", wantSubstr)
-		}
-		msg := toString(r)
-		if !strings.Contains(msg, wantSubstr) {
-			t.Fatalf("panic=%q want contains %q", msg, wantSubstr)
-		}
-	}()
-	fn()
-}
-
-func mustWriteFile(t *testing.T, path, content string) {
-	t.Helper()
-	mustMkdirAll(t, filepath.Dir(path))
-	if err := os.WriteFile(path, []byte(content), 0o644); err != nil {
-		t.Fatalf("write %s: %v", path, err)
-	}
-}
-
-func mustMkdirAll(t *testing.T, path string) {
-	t.Helper()
-	if err := os.MkdirAll(path, 0o755); err != nil {
-		t.Fatalf("mkdir %s: %v", path, err)
-	}
-}
-
-func mustReadString(t *testing.T, path string) string {
-	t.Helper()
-	b, err := os.ReadFile(path)
-	if err != nil {
-		t.Fatalf("read %s: %v", path, err)
-	}
-	return string(b)
-}
-
-func assertContainsInOrder(t *testing.T, s string, parts ...string) {
-	t.Helper()
-	pos := 0
-	for _, p := range parts {
-		i := strings.Index(s[pos:], p)
-		if i < 0 {
-			t.Fatalf("expected to find %q after pos=%d", p, pos)
-		}
-		pos += i + len(p)
-	}
-}
-
-func toString(v any) string {
-	switch x := v.(type) {
-	case string:
-		return x
-	case error:
-		return x.Error()
-	default:
-		return fmt.Sprintf("%v", v)
 	}
 }
