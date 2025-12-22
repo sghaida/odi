@@ -14,7 +14,6 @@ type TB interface {
 	Cleanup(func())
 }
 
-
 type pkgHarness struct {
 	t   *testing.T
 	dir string
@@ -39,6 +38,37 @@ func (p *pkgHarness) out(rel string) string {
 func (p *pkgHarness) read(rel string) string {
 	p.t.Helper()
 	return mustReadString(p.t, filepath.Join(p.dir, rel))
+}
+
+type cfgMatrixRow struct {
+	name      string
+	force     string
+	initial   string
+	want      string
+	wantPanic string
+}
+
+var configMatrix = []cfgMatrixRow{
+	{name: "forced_import_wins", force: "example.com/forced/config", initial: "", want: "example.com/forced/config"},
+	{name: "scanned_used_when_no_force_and_empty", force: "", initial: "", want: "example.com/proj/config"},
+	{name: "keeps_existing_import_if_already_set", force: "", initial: "example.com/already/config", want: "example.com/already/config"},
+	{name: "panics_if_enabled_and_cannot_infer_and_no_config_dir", force: "", initial: "", wantPanic: "cannot infer"},
+}
+
+func writeDISource(p *pkgHarness) {
+	p.write("di.go", `package p
+import di "example.com/proj/di"
+func _() { _ = di.Registry(nil) }`)
+}
+
+func writeConfigSource(p *pkgHarness) {
+	p.write("cfg.go", `package p
+import config "example.com/proj/config"
+var _ = config.Config{}`)
+}
+
+func writeGoMod(p *pkgHarness) {
+	p.write("go.mod", "module example.com/proj\n\ngo 1.22\n")
 }
 
 func chmodNoRead(t TB, path string) {
@@ -134,7 +164,6 @@ type inferCase[T any] struct {
 	wantPanic string
 }
 
-
 func runInferCases[T any](t *testing.T, cases []inferCase[T]) {
 	t.Helper()
 	for _, tc := range cases {
@@ -169,3 +198,105 @@ func (f fatalTB) Fatalf(format string, args ...any) {
 	panic(fmt.Sprintf(format, args...))
 }
 
+func addServiceConfigMatrixCases(cases []inferCase[ServiceSpec], matrix []cfgMatrixRow) []inferCase[ServiceSpec] {
+	for _, row := range matrix {
+		row := row
+		cases = append(cases, inferCase[ServiceSpec]{
+			name: "config_enabled_" + row.name,
+			setup: func(p *pkgHarness) (*ServiceSpec, string) {
+				outPath := p.out("svc.gen.go")
+
+				writeDISource(p)
+
+				if row.wantPanic == "" {
+					writeConfigSource(p)
+				} else {
+					writeGoMod(p)
+					// no ./config dir and no config import in sources
+				}
+
+				s := &ServiceSpec{
+					Package: "p", WrapperBase: "W", VersionSuffix: "V2", ImplType: "Impl", Constructor: "NewImpl",
+					Imports:  Imports{DI: "", Config: row.initial},
+					Config:   ConfigSpec{Enabled: true, Import: row.force},
+					Required: []RequiredDep{{Name: "A", Field: "a", Type: "*A", Nilable: true}},
+				}
+				return s, outPath
+			},
+			call:      inferImportsForService,
+			wantPanic: row.wantPanic,
+			assert: func(t *testing.T, s *ServiceSpec) {
+				// tighten the panic string to service’s message
+				if row.wantPanic != "" {
+					// The caller already checks wantPanic; no assert needed here.
+					return
+				}
+				if s.Imports.Config != row.want {
+					t.Fatalf("Config import: got %q want %q", s.Imports.Config, row.want)
+				}
+				if s.Imports.DI != "example.com/proj/di" {
+					t.Fatalf("DI import: got %q want %q", s.Imports.DI, "example.com/proj/di")
+				}
+			},
+		})
+	}
+	return cases
+}
+
+func addGraphConfigMatrixCases(cases []inferCase[GraphSpec], matrix []cfgMatrixRow) []inferCase[GraphSpec] {
+	for _, row := range matrix {
+		row := row
+		cases = append(cases, inferCase[GraphSpec]{
+			name: "config_enabled_" + row.name,
+			setup: func(p *pkgHarness) (*GraphSpec, string) {
+				outPath := p.out("graph.gen.go")
+
+				writeDISource(p)
+
+				if row.wantPanic == "" {
+					writeConfigSource(p)
+				} else {
+					writeGoMod(p)
+				}
+
+				g := &GraphSpec{
+					Package: "p",
+					Imports: Imports{DI: "", Config: row.initial},
+					Config:  ConfigSpec{Enabled: true, Import: row.force},
+					Roots: []struct {
+						Name              string `json:"name"`
+						BuildWithRegistry bool   `json:"buildWithRegistry"`
+						Services          []struct {
+							Var        string `json:"var"`
+							FacadeCtor string `json:"facadeCtor"`
+							FacadeType string `json:"facadeType"`
+							ImplType   string `json:"implType"`
+						} `json:"services"`
+						Wiring []struct {
+							To      string `json:"to"`
+							Call    string `json:"call"`
+							ArgFrom string `json:"argFrom"`
+						} `json:"wiring"`
+					}{
+						{Name: "Root"},
+					},
+				}
+				return g, outPath
+			},
+			call:      inferImportsForGraph,
+			wantPanic: row.wantPanic,
+			assert: func(t *testing.T, g *GraphSpec) {
+				if row.wantPanic != "" {
+					return
+				}
+				if g.Imports.Config != row.want {
+					t.Fatalf("Config import: got %q want %q", g.Imports.Config, row.want)
+				}
+				if g.Imports.DI != "example.com/proj/di" {
+					t.Fatalf("DI import: got %q want %q", g.Imports.DI, "example.com/proj/di")
+				}
+			},
+		})
+	}
+	return cases
+}

@@ -212,24 +212,12 @@ func validateSpec(spec *Spec) {
 //
 // This is used to discover the owner file’s imports so generated code matches local style.
 func findOwnerGoGenerateFile(packageDir string) (string, error) {
-	dirEntries, err := os.ReadDir(packageDir)
+	files, err := listGoSourceFiles(packageDir)
 	if err != nil {
 		return "", err
 	}
 
-	for _, entry := range dirEntries {
-		if entry.IsDir() {
-			continue
-		}
-
-		fileName := entry.Name()
-		if !strings.HasSuffix(fileName, ".go") ||
-			strings.HasSuffix(fileName, "_test.go") ||
-			strings.HasSuffix(fileName, ".gen.go") {
-			continue
-		}
-
-		filePath := filepath.Join(packageDir, fileName)
+	for _, filePath := range files {
 		fileBytes, err := os.ReadFile(filePath)
 		if err != nil {
 			// Best-effort: unreadable file shouldn’t break generation.
@@ -379,7 +367,7 @@ func determineConstructorNeedsConfig(spec *Spec, sourceDir string) bool {
 		return *spec.ConstructorTakesConfig
 	}
 
-	dirEntries, err := os.ReadDir(sourceDir)
+	files, err := listGoSourceFiles(sourceDir)
 	if err != nil {
 		// Backward-compatible default: assume config.
 		return true
@@ -387,21 +375,7 @@ func determineConstructorNeedsConfig(spec *Spec, sourceDir string) bool {
 
 	fileSet := token.NewFileSet()
 
-	for _, entry := range dirEntries {
-		if entry.IsDir() {
-			continue
-		}
-
-		fileName := entry.Name()
-		if !strings.HasSuffix(fileName, ".go") ||
-			strings.HasSuffix(fileName, "_test.go") ||
-			strings.HasSuffix(fileName, ".gen.go") {
-			continue
-		}
-
-		filePath := filepath.Join(sourceDir, fileName)
-
-		// Parse with AllErrors so we can still get partial ASTs when possible.
+	for _, filePath := range files {
 		parsedFile, parseErr := parser.ParseFile(fileSet, filePath, nil, parser.AllErrors)
 		if parsedFile == nil {
 			_ = parseErr
@@ -413,12 +387,9 @@ func determineConstructorNeedsConfig(spec *Spec, sourceDir string) bool {
 			if !ok {
 				continue
 			}
-
-			// Ignore methods; only free functions are constructors.
 			if funcDecl.Recv != nil {
 				continue
 			}
-
 			if funcDecl.Name == nil || funcDecl.Name.Name != spec.Constructor {
 				continue
 			}
@@ -428,33 +399,25 @@ func determineConstructorNeedsConfig(spec *Spec, sourceDir string) bool {
 				return false
 			}
 
-			// Exactly one param: detect config.Config
 			if len(paramList.List) == 1 {
 				paramType := paramList.List[0].Type
 
 				selectorExpr, ok := paramType.(*ast.SelectorExpr)
 				if !ok {
-					// One param but not a selector expr: safest default is "needs config".
 					return true
 				}
 
 				pkgIdent, ok := selectorExpr.X.(*ast.Ident)
 				if !ok {
-					// Defensive: can happen with partial AST from invalid code; safest default is "needs config".
 					return true
 				}
-
 				if pkgIdent.Name == "config" && selectorExpr.Sel != nil && selectorExpr.Sel.Name == "Config" {
 					return true
 				}
 			}
-
-			// Unrecognized signature => safest backward-compatible default.
 			return true
 		}
 	}
-
-	// Constructor not found => safest backward-compatible default.
 	return true
 }
 
@@ -575,6 +538,33 @@ func writeFileAtomic(targetPath string, data []byte, perm os.FileMode) (err erro
 		return err
 	}
 	return nil
+}
+
+// listGoSourceFiles returns non-test, non-generated Go source files in dir.
+// It skips subdirectories and files ending with _test.go or .gen.go.
+func listGoSourceFiles(dir string) ([]string, error) {
+	dirEntries, err := os.ReadDir(dir)
+	if err != nil {
+		return nil, err
+	}
+
+	var files []string
+	for _, entry := range dirEntries {
+		if entry.IsDir() {
+			continue
+		}
+
+		fileName := entry.Name()
+		if !strings.HasSuffix(fileName, ".go") ||
+			strings.HasSuffix(fileName, "_test.go") ||
+			strings.HasSuffix(fileName, ".gen.go") {
+			continue
+		}
+
+		files = append(files, filepath.Join(dir, fileName))
+	}
+
+	return files, nil
 }
 
 // must panics if err is non-nil.

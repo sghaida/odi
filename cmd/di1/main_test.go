@@ -1,9 +1,9 @@
+// main_test.go
 package main
 
 import (
 	"bytes"
 	"errors"
-	"fmt"
 	"os"
 	"path/filepath"
 	"strings"
@@ -15,129 +15,9 @@ import (
 
 //
 // -----------------------------------------------------------------------------
-// Fixtures
-// -----------------------------------------------------------------------------
-
-// minimalSpecJSON returns a minimal inject spec JSON that passes validateSpec
-// and allows run() to generate output.
-//
-// It includes imports.config as a fallback so generation can still succeed
-// even when owner-file import discovery fails (by design in some tests).
-func minimalSpecJSON() []byte {
-	return []byte(`{
-  "package": "svc",
-  "wrapperBase": "User",
-  "versionSuffix": "V1",
-  "implType": "Service",
-  "constructor": "NewService",
-  "imports": { "config": "example.com/project/autowire/config" },
-  "required": [
-    { "name": "DB", "field": "db", "type": "*sql.DB" }
-  ]
-}`)
-}
-
-//
-// -----------------------------------------------------------------------------
-// Small helpers
-// -----------------------------------------------------------------------------
-
-// boolPtr returns a pointer to v.
-func boolPtr(v bool) *bool { return &v }
-
-// intPtr returns a pointer to v.
-func intPtr(v int) *int { return &v }
-
-// mustPanicContains asserts fn panics and the panic message contains wantSub.
-func mustPanicContains(t *testing.T, wantSub string, fn func()) {
-	t.Helper()
-
-	defer func() {
-		r := recover()
-		require.NotNil(t, r)
-
-		var msg string
-		switch v := r.(type) {
-		case error:
-			msg = v.Error()
-		case string:
-			msg = v
-		default:
-			msg = fmt.Sprintf("%v", v)
-		}
-		require.Contains(t, msg, wantSub)
-	}()
-
-	fn()
-}
-
-//
-// -----------------------------------------------------------------------------
-// writeFileAtomic() seam helpers
-// -----------------------------------------------------------------------------
-
-// fakeTempFile is a controllable file-like object for writeFileAtomic tests.
-// It lets tests force errors on Write and Close without touching real files.
-type fakeTempFile struct {
-	fileName string
-	writeErr error
-	closeErr error
-}
-
-func (f *fakeTempFile) Name() string { return f.fileName }
-
-func (f *fakeTempFile) Write(p []byte) (int, error) {
-	if f.writeErr != nil {
-		return 0, f.writeErr
-	}
-	return len(p), nil
-}
-
-func (f *fakeTempFile) Close() error { return f.closeErr }
-
-// snapWriteSeams captures the current global file seams so tests can restore them.
-// writeFileAtomic uses these seams for testability.
-func snapWriteSeams(t *testing.T) (
-	origCreate func(string, string) (tempFile, error),
-	origRemove func(string) error,
-	origChmod func(string, os.FileMode) error,
-	origRename func(string, string) error,
-) {
-	t.Helper()
-	return createTempFile, removeFile, chmodFile, renameFile
-}
-
-// setWriteSeams overrides the global seams used by writeFileAtomic.
-// Pass nil for any seam you don't want to override.
-func setWriteSeams(
-	t *testing.T,
-	createFn func(string, string) (tempFile, error),
-	removeFn func(path string) error,
-	chmodFn func(path string, mode os.FileMode) error,
-	renameFn func(oldpath, newpath string) error,
-) {
-	t.Helper()
-
-	if createFn != nil {
-		createTempFile = createFn
-	}
-	if removeFn != nil {
-		removeFile = removeFn
-	}
-	if chmodFn != nil {
-		chmodFile = chmodFn
-	}
-	if renameFn != nil {
-		renameFile = renameFn
-	}
-}
-
-//
-// -----------------------------------------------------------------------------
 // must()
 // -----------------------------------------------------------------------------
 
-// TestMust_PanicsOnError covers must() for nil and non-nil errors.
 func TestMust_PanicsOnError(t *testing.T) {
 	t.Parallel()
 
@@ -150,13 +30,6 @@ func TestMust_PanicsOnError(t *testing.T) {
 // writeFileAtomic()
 // -----------------------------------------------------------------------------
 
-// TestWriteFileAtomic_ErrorBranches covers every writeFileAtomic error branch,
-// including deferred cleanup:
-// - createTempFile failure
-// - Write failure triggers Close + deferred remove
-// - Close failure triggers deferred remove
-// - chmod failure triggers deferred remove
-// - rename failure triggers deferred remove
 func TestWriteFileAtomic_ErrorBranches(t *testing.T) {
 	// NOT parallel: mutates global seams.
 
@@ -283,17 +156,13 @@ func TestWriteFileAtomic_ErrorBranches(t *testing.T) {
 	}
 }
 
-// TestWriteFileAtomic_Success covers the success path of writeFileAtomic.
 func TestWriteFileAtomic_Success(t *testing.T) {
 	// NOT parallel: uses real filesystem but does not mutate seams.
 	tempDir := t.TempDir()
 	out := filepath.Join(tempDir, "final.go")
 
 	require.NoError(t, writeFileAtomic(out, []byte("hello"), 0o644))
-
-	b, err := os.ReadFile(out)
-	require.NoError(t, err)
-	assert.Equal(t, "hello", string(b))
+	assert.Equal(t, "hello", readFileString(t, out))
 }
 
 //
@@ -301,12 +170,6 @@ func TestWriteFileAtomic_Success(t *testing.T) {
 // validateSpec()
 // -----------------------------------------------------------------------------
 
-// TestValidateSpec_Branches covers validateSpec behavior including:
-// - missing required fields collection
-// - required deps empty
-// - dep validation (missing name/field/type)
-// - duplicates across required + optional
-// - optional deps loop
 func TestValidateSpec_Branches(t *testing.T) {
 	t.Parallel()
 
@@ -388,15 +251,14 @@ func TestValidateSpec_Branches(t *testing.T) {
 // readImportsFromFile / ensureImport / containsAlias / containsPath
 // -----------------------------------------------------------------------------
 
-// TestReadImportsFromFile covers readImportsFromFile parse error and success paths.
 func TestReadImportsFromFile(t *testing.T) {
 	t.Parallel()
 
 	tests := []struct {
-		name      string
-		source    string
-		wantErr   bool
-		check     func(t *testing.T, imports []ImportSpec)
+		name    string
+		source  string
+		wantErr bool
+		check   func(t *testing.T, imports []ImportSpec)
 	}{
 		{
 			name:    "parse error",
@@ -427,8 +289,7 @@ import (
 		tc := tc
 		t.Run(tc.name, func(t *testing.T) {
 			dir := t.TempDir()
-			p := filepath.Join(dir, "file.go")
-			require.NoError(t, os.WriteFile(p, []byte(tc.source), 0o644))
+			p := writeTempFile(t, dir, "file.go", tc.source, 0o644)
 
 			imps, err := readImportsFromFile(p)
 			if tc.wantErr {
@@ -443,7 +304,6 @@ import (
 	}
 }
 
-// TestEnsureImport_NoDupByPath covers ensureImport no-op when path already exists.
 func TestEnsureImport_NoDupByPath(t *testing.T) {
 	t.Parallel()
 
@@ -455,7 +315,6 @@ func TestEnsureImport_NoDupByPath(t *testing.T) {
 	assert.Equal(t, "fmt", imps[0].Path)
 }
 
-// TestContainsAliasPath covers containsAlias/containsPath match/no-match behavior.
 func TestContainsAliasPath(t *testing.T) {
 	t.Parallel()
 
@@ -477,12 +336,6 @@ func TestContainsAliasPath(t *testing.T) {
 // resolveImports()
 // -----------------------------------------------------------------------------
 
-// TestResolveImports_Branches covers resolveImports branches:
-// - owner imports parse error fallback to empty
-// - !constructorNeedsConfig early return
-// - containsAlias("config") early return
-// - missing spec.Imports.Config error
-// - config path imported without explicit alias is OK when default ident is 'config'
 func TestResolveImports_Branches(t *testing.T) {
 	t.Parallel()
 
@@ -605,28 +458,15 @@ import (
 // determineConstructorNeedsConfig()
 // -----------------------------------------------------------------------------
 
-// TestCtorNeedsConfig covers determineConstructorNeedsConfig branches:
-// - explicit override (nil vs non-nil)
-// - ReadDir error default true
-// - entry.IsDir() skip
-// - parser.ParseFile error skip
-// - non-func decl skip
-// - method receiver skip
-// - name mismatch skip
-// - no params => false
-// - one param but not *ast.SelectorExpr => true
-// - selector matches config.Config => true
-// - selector is Ident but not "config" => unrecognized signature => true
-// - constructor not found => default true
 func TestCtorNeedsConfig(t *testing.T) {
 	t.Parallel()
 
 	tests := []struct {
-		name      string
-		override  *bool
-		files     map[string]string
-		want      bool
-		missing   bool
+		name     string
+		override *bool
+		files    map[string]string
+		want     bool
+		missing  bool
 	}{
 		{
 			name:     "override true",
@@ -713,7 +553,7 @@ func NewService(cfg other.Config) {}
 			require.NoError(t, os.Mkdir(filepath.Join(dir, "subdir"), 0o755))
 
 			for name, src := range tc.files {
-				require.NoError(t, os.WriteFile(filepath.Join(dir, name), []byte(src), 0o644))
+				writeTempFile(t, dir, name, src, 0o644)
 			}
 
 			assert.Equal(t, tc.want, determineConstructorNeedsConfig(spec, dir))
@@ -726,21 +566,14 @@ func NewService(cfg other.Config) {}
 // findOwnerGoGenerateFile()
 // -----------------------------------------------------------------------------
 
-// TestFindOwnerFile covers findOwnerGoGenerateFile branches:
-// - os.ReadDir error
-// - entry.IsDir() skip
-// - suffix filters for non-go and _test.go
-// - os.ReadFile error skip
-// - match found
-// - no match found
 func TestFindOwnerFile(t *testing.T) {
 	// NOT parallel: uses symlink (may be skipped).
 
 	tests := []struct {
-		name     string
-		setup    func(t *testing.T) string
-		wantErr  bool
-		wantSfx  string
+		name    string
+		setup   func(t *testing.T) string
+		wantErr bool
+		wantSfx string
 	}{
 		{
 			name: "ReadDir error",
@@ -758,20 +591,14 @@ func TestFindOwnerFile(t *testing.T) {
 				require.NoError(t, os.Mkdir(filepath.Join(dir, "00_dir"), 0o755))
 
 				// suffix filters
-				require.NoError(t, os.WriteFile(filepath.Join(dir, "01_readme.md"), []byte("ignore"), 0o644))
-				require.NoError(t, os.WriteFile(filepath.Join(dir, "02_owner_test.go"), []byte("package svc\n"), 0o644))
+				writeTempFile(t, dir, "01_readme.md", "ignore", 0o644)
+				writeTempFile(t, dir, "02_owner_test.go", "package svc\n", 0o644)
 
 				// ReadFile error skip
-				broken := filepath.Join(dir, "03_broken.go")
-				if err := os.Symlink(filepath.Join(dir, "does-not-exist-target"), broken); err != nil {
-					unreadable := filepath.Join(dir, "03_unreadable.go")
-					require.NoError(t, os.WriteFile(unreadable, []byte("package svc\n"), 0o644))
-					require.NoError(t, os.Chmod(unreadable, 0o000))
-					t.Cleanup(func() { _ = os.Chmod(unreadable, 0o644) })
-				}
+				_ = makeUnreadableGoFile(t, dir, "03_broken.go")
 
 				// Non-matching go file
-				require.NoError(t, os.WriteFile(filepath.Join(dir, "04_other.go"), []byte("package svc\n"), 0o644))
+				writeTempFile(t, dir, "04_other.go", "package svc\n", 0o644)
 
 				// Matching owner file (sorted last)
 				owner := filepath.Join(dir, "zz_owner.go")
@@ -789,7 +616,7 @@ func TestFindOwnerFile(t *testing.T) {
 			name: "no match",
 			setup: func(t *testing.T) string {
 				dir := t.TempDir()
-				require.NoError(t, os.WriteFile(filepath.Join(dir, "a.go"), []byte("package svc\n"), 0o644))
+				writeTempFile(t, dir, "a.go", "package svc\n", 0o644)
 				return dir
 			},
 			wantErr: true,
@@ -812,12 +639,37 @@ func TestFindOwnerFile(t *testing.T) {
 	}
 }
 
+func TestFindOwnerFile_SkipsDirAndReadError(t *testing.T) {
+	// NOT parallel: relies on filesystem entries.
+	dir := t.TempDir()
+
+	// IsDir == true branch
+	require.NoError(t, os.Mkdir(filepath.Join(dir, "00_dir"), 0o755))
+
+	// ReadFile error branch
+	_ = makeUnreadableGoFile(t, dir, "01_broken.go")
+
+	// suffix skip files
+	writeTempFile(t, dir, "02_readme.md", "ignore", 0o644)
+	writeTempFile(t, dir, "03_owner_test.go", "package svc\n", 0o644)
+
+	// matching owner file must sort last
+	want := filepath.Join(dir, "zz_owner.go")
+	require.NoError(t, os.WriteFile(want, []byte(`package svc
+
+//go:generate go run ../../cmd/di1 -spec ./specs/x.inject.json -out ./x.gen.go
+`), 0o644))
+
+	found, err := findOwnerGoGenerateFile(dir)
+	require.NoError(t, err)
+	assert.Equal(t, want, found)
+}
+
 //
 // -----------------------------------------------------------------------------
 // Template rendering (smoke)
 // -----------------------------------------------------------------------------
 
-// TestTemplateSmoke ensures the template renders expected output from templateData.
 func TestTemplateSmoke(t *testing.T) {
 	t.Parallel()
 
@@ -858,7 +710,6 @@ func TestTemplateSmoke(t *testing.T) {
 // run(): relative out path cleaning
 // -----------------------------------------------------------------------------
 
-// TestRun_CleansRelativeOutPath verifies run() cleans a relative -out path.
 func TestRun_CleansRelativeOutPath(t *testing.T) {
 	// NOT parallel:
 	// - uses run() which calls writeFileAtomic
@@ -884,9 +735,7 @@ func TestRun_CleansRelativeOutPath(t *testing.T) {
 	code := run([]string{"-spec", specPath, "-out", relOut}, &stderr)
 	require.Equal(t, 0, code)
 
-	b, err := os.ReadFile(cleanOut)
-	require.NoError(t, err)
-	assert.Contains(t, string(b), "type UserV1 struct")
+	assert.Contains(t, readFileString(t, cleanOut), "type UserV1 struct")
 }
 
 //
@@ -894,10 +743,6 @@ func TestRun_CleansRelativeOutPath(t *testing.T) {
 // run(): error branches
 // -----------------------------------------------------------------------------
 
-// TestRun_Errors covers:
-// - flag parse error
-// - missing args usage
-// - panic on resolveImports error
 func TestRun_Errors(t *testing.T) {
 	// NOT parallel: filesystem + generation
 
@@ -990,50 +835,9 @@ func NewService(cfg config.Config) {}
 
 //
 // -----------------------------------------------------------------------------
-// Coverage-focused: findOwnerGoGenerateFile IsDir + ReadFile error continue
-// -----------------------------------------------------------------------------
-
-// TestFindOwnerFile_SkipsDirAndReadError covers the IsDir skip and ReadFile error
-// continue branches in findOwnerGoGenerateFile.
-func TestFindOwnerFile_SkipsDirAndReadError(t *testing.T) {
-	// NOT parallel: relies on filesystem entries.
-	dir := t.TempDir()
-
-	// IsDir == true branch
-	require.NoError(t, os.Mkdir(filepath.Join(dir, "00_dir"), 0o755))
-
-	// ReadFile error branch (prefer broken symlink; fall back to chmod)
-	broken := filepath.Join(dir, "01_broken.go")
-	if err := os.Symlink(filepath.Join(dir, "does-not-exist-target"), broken); err != nil {
-		unreadable := filepath.Join(dir, "01_unreadable.go")
-		require.NoError(t, os.WriteFile(unreadable, []byte("package svc\n"), 0o644))
-		require.NoError(t, os.Chmod(unreadable, 0o000))
-		t.Cleanup(func() { _ = os.Chmod(unreadable, 0o644) })
-	}
-
-	// suffix skip files
-	require.NoError(t, os.WriteFile(filepath.Join(dir, "02_readme.md"), []byte("ignore"), 0o644))
-	require.NoError(t, os.WriteFile(filepath.Join(dir, "03_owner_test.go"), []byte("package svc\n"), 0o644))
-
-	// matching owner file must sort last
-	want := filepath.Join(dir, "zz_owner.go")
-	require.NoError(t, os.WriteFile(want, []byte(`package svc
-
-//go:generate go run ../../cmd/di1 -spec ./specs/x.inject.json -out ./x.gen.go
-`), 0o644))
-
-	found, err := findOwnerGoGenerateFile(dir)
-	require.NoError(t, err)
-	assert.Equal(t, want, found)
-}
-
-//
-// -----------------------------------------------------------------------------
 // Coverage-focused: determineConstructorNeedsConfig suffix continues
 // -----------------------------------------------------------------------------
 
-// TestCtorNeedsConfig_SkipsSuffixes covers suffix filter continues in
-// determineConstructorNeedsConfig.
 func TestCtorNeedsConfig_SkipsSuffixes(t *testing.T) {
 	// NOT parallel: filesystem order sensitive for coverage.
 	dir := t.TempDir()
@@ -1042,14 +846,14 @@ func TestCtorNeedsConfig_SkipsSuffixes(t *testing.T) {
 	// - not .go
 	// - _test.go
 	// - .gen.go
-	require.NoError(t, os.WriteFile(filepath.Join(dir, "00_notes.txt"), []byte("ignore"), 0o644))
-	require.NoError(t, os.WriteFile(filepath.Join(dir, "01_svc_test.go"), []byte("package svc\n"), 0o644))
-	require.NoError(t, os.WriteFile(filepath.Join(dir, "02_svc.gen.go"), []byte("package svc\n"), 0o644))
+	writeTempFile(t, dir, "00_notes.txt", "ignore", 0o644)
+	writeTempFile(t, dir, "01_svc_test.go", "package svc\n", 0o644)
+	writeTempFile(t, dir, "02_svc.gen.go", "package svc\n", 0o644)
 
 	// real constructor
-	require.NoError(t, os.WriteFile(filepath.Join(dir, "zz_svc.go"), []byte(`package svc
+	writeTempFile(t, dir, "zz_svc.go", `package svc
 func NewService(cfg config.Config) {}
-`), 0o644))
+`, 0o644)
 
 	spec := &Spec{Constructor: "NewService"}
 	assert.True(t, determineConstructorNeedsConfig(spec, dir))

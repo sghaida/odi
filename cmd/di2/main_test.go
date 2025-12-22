@@ -12,10 +12,6 @@ import (
 )
 
 // -------------------------
-// Small test harness
-// -------------------------
-
-// -------------------------
 // applyConfigDefaults
 // -------------------------
 
@@ -293,7 +289,6 @@ func TestFindModule(t *testing.T) {
 			t.Fatalf("expected error, got %v", err)
 		}
 		if !strings.Contains(err.Error(), "empty module path") && !strings.Contains(err.Error(), "missing module directive") {
-			// depending on implementation details; accept either as long as it’s an error from module parsing.
 			t.Fatalf("unexpected error: %v", err)
 		}
 	})
@@ -328,7 +323,6 @@ func TestFindModule(t *testing.T) {
 		if err == nil {
 			t.Fatalf("expected error, got nil")
 		}
-		// Ensure it's not our cmdError strings.
 		if strings.Contains(err.Error(), "missing module directive") ||
 			strings.Contains(err.Error(), "could not find go.mod") {
 			t.Fatalf("expected raw read error, got: %v", err)
@@ -733,26 +727,11 @@ func TestSha256Hex(t *testing.T) {
 }
 
 // -------------------------
-// inferImportsForService / inferImportsForGraph
+// inferImportsForService / inferImportsForGraph (DEDUPED USING test_helpers.go)
 // -------------------------
 
 func TestInferImportsForService_Cases(t *testing.T) {
 	t.Parallel()
-
-	type cfgMatrix struct {
-		name      string
-		force     string
-		initial   string
-		want      string
-		wantPanic string
-	}
-
-	matrix := []cfgMatrix{
-		{name: "forced_import_wins", force: "example.com/forced/config", initial: "", want: "example.com/forced/config"},
-		{name: "scanned_used_when_no_force_and_empty", force: "", initial: "", want: "example.com/proj/config"},
-		{name: "keeps_existing_import_if_already_set", force: "", initial: "example.com/already/config", want: "example.com/already/config"},
-		{name: "panics_if_enabled_and_cannot_infer_and_no_config_dir", force: "", initial: "", wantPanic: "cannot infer imports.config (service)"},
-	}
 
 	cases := []inferCase[ServiceSpec]{
 		{
@@ -821,73 +800,22 @@ func _() { _ = di.Registry(nil) }`)
 		},
 	}
 
-	// add matrix-driven config-enabled cases
-	for _, row := range matrix {
-		row := row
-		cases = append(cases, inferCase[ServiceSpec]{
-			name: "config_enabled_" + row.name,
-			setup: func(p *pkgHarness) (*ServiceSpec, string) {
-				outPath := p.out("svc.gen.go")
-
-				// always DI in sources
-				p.write("di.go", `package p
-import di "example.com/proj/di"
-func _() { _ = di.Registry(nil) }`)
-
-				if row.wantPanic == "" {
-					// enable scanning success
-					p.write("cfg.go", `package p
-import config "example.com/proj/config"
-var _ = config.Config{}`)
-				} else {
-					// go.mod exists so it gets past "cannot find project go.mod"
-					p.write("go.mod", "module example.com/proj\n\ngo 1.22\n")
-					// no ./config dir and no config import in sources
-				}
-
-				s := &ServiceSpec{
-					Package: "p", WrapperBase: "W", VersionSuffix: "V2", ImplType: "Impl", Constructor: "NewImpl",
-					Imports: Imports{DI: "", Config: row.initial},
-					Config:  ConfigSpec{Enabled: true, Import: row.force},
-					Required: []RequiredDep{
-						{Name: "A", Field: "a", Type: "*A", Nilable: true},
-					},
-				}
-				return s, outPath
-			},
-			call:      inferImportsForService,
-			wantPanic: row.wantPanic,
-			assert: func(t *testing.T, s *ServiceSpec) {
-				if s.Imports.Config != row.want {
-					t.Fatalf("Config import: got %q want %q", s.Imports.Config, row.want)
-				}
-				if s.Imports.DI != "example.com/proj/di" {
-					t.Fatalf("DI import: got %q want %q", s.Imports.DI, "example.com/proj/di")
-				}
-			},
-		})
+	// matrix-driven config-enabled cases (from test_helpers.go)
+	serviceMatrix := make([]cfgMatrixRow, 0, len(configMatrix))
+	for _, r := range configMatrix {
+		r2 := r
+		if r2.wantPanic != "" {
+			r2.wantPanic = "cannot infer imports.config (service)"
+		}
+		serviceMatrix = append(serviceMatrix, r2)
 	}
+	cases = addServiceConfigMatrixCases(cases, serviceMatrix)
 
 	runInferCases(t, cases)
 }
 
 func TestInferImportsForGraph_Cases(t *testing.T) {
 	t.Parallel()
-
-	type cfgMatrix struct {
-		name      string
-		force     string
-		initial   string
-		want      string
-		wantPanic string
-	}
-
-	matrix := []cfgMatrix{
-		{name: "forced_import_wins", force: "example.com/forced/config", initial: "", want: "example.com/forced/config"},
-		{name: "scanned_used_when_no_force_and_empty", force: "", initial: "", want: "example.com/proj/config"},
-		{name: "keeps_existing_import_if_already_set", force: "", initial: "example.com/already/config", want: "example.com/already/config"},
-		{name: "panics_if_enabled_and_cannot_infer_and_no_config_dir", force: "", initial: "", wantPanic: "cannot infer graph imports.config"},
-	}
 
 	cases := []inferCase[GraphSpec]{
 		{
@@ -998,61 +926,15 @@ func _() { _ = di.Registry(nil) }`)
 		},
 	}
 
-	for _, row := range matrix {
-		row := row
-		cases = append(cases, inferCase[GraphSpec]{
-			name: "config_enabled_" + row.name,
-			setup: func(p *pkgHarness) (*GraphSpec, string) {
-				outPath := p.out("graph.gen.go")
-
-				p.write("di.go", `package p
-import di "example.com/proj/di"
-func _() { _ = di.Registry(nil) }`)
-
-				if row.wantPanic == "" {
-					p.write("cfg.go", `package p
-import config "example.com/proj/config"
-var _ = config.Config{}`)
-				} else {
-					p.write("go.mod", "module example.com/proj\n\ngo 1.22\n")
-				}
-
-				g := &GraphSpec{
-					Package: "p",
-					Imports: Imports{DI: "", Config: row.initial},
-					Config:  ConfigSpec{Enabled: true, Import: row.force},
-					Roots: []struct {
-						Name              string `json:"name"`
-						BuildWithRegistry bool   `json:"buildWithRegistry"`
-						Services          []struct {
-							Var        string `json:"var"`
-							FacadeCtor string `json:"facadeCtor"`
-							FacadeType string `json:"facadeType"`
-							ImplType   string `json:"implType"`
-						} `json:"services"`
-						Wiring []struct {
-							To      string `json:"to"`
-							Call    string `json:"call"`
-							ArgFrom string `json:"argFrom"`
-						} `json:"wiring"`
-					}{
-						{Name: "Root"},
-					},
-				}
-				return g, outPath
-			},
-			call:      inferImportsForGraph,
-			wantPanic: row.wantPanic,
-			assert: func(t *testing.T, g *GraphSpec) {
-				if g.Imports.Config != row.want {
-					t.Fatalf("Config import: got %q want %q", g.Imports.Config, row.want)
-				}
-				if g.Imports.DI != "example.com/proj/di" {
-					t.Fatalf("DI import: got %q want %q", g.Imports.DI, "example.com/proj/di")
-				}
-			},
-		})
+	graphMatrix := make([]cfgMatrixRow, 0, len(configMatrix))
+	for _, r := range configMatrix {
+		r2 := r
+		if r2.wantPanic != "" {
+			r2.wantPanic = "cannot infer graph imports.config"
+		}
+		graphMatrix = append(graphMatrix, r2)
 	}
+	cases = addGraphConfigMatrixCases(cases, graphMatrix)
 
 	runInferCases(t, cases)
 }
@@ -1247,7 +1129,7 @@ func TestRun_Routing_SpecAndGraphHappyPaths(t *testing.T) {
 }
 
 // -------------------------
-// genService / genGraph (slimmed but same intent coverage)
+// genService / genGraph (unchanged; already good coverage)
 // -------------------------
 
 func TestGenService_CoversDefaultsSortingImportsPreserveAndStdlibAutoImports(t *testing.T) {
@@ -1373,7 +1255,6 @@ import keep "example.com/keep/me"`)
 				t.Fatalf("expected InjectPolicy default to error")
 			}
 
-			// deterministic ordering checks (still verifies sorting & template ordering)
 			assertContainsInOrder(t, out, "TryInjectA", "TryInjectB")
 			assertContainsInOrder(t, out, `= "alpha-key"`, `= "zed-key"`)
 			assertContainsInOrder(t, out, "func (b *FooV2) Alpha(", "func (b *FooV2) Zeta(")

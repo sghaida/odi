@@ -357,6 +357,69 @@ func validateGraphSpec(g *GraphSpec) {
 	}
 }
 
+// inferOptionalConfigImport populates imports.Config based on cfg + scanned imports + go.mod fallback.
+// If cfg.Enabled=false it clears imports.Config.
+// ctx is used to keep the original error strings distinct (service vs graph).
+func inferOptionalConfigImport(
+	cfg *ConfigSpec,
+	imports *Imports,
+	scanned []GoImport,
+	pkgDir string,
+	ctx string, // e.g. "imports.config (service)" or "graph imports.config"
+) {
+	if cfg == nil || !cfg.Enabled {
+		imports.Config = ""
+		return
+	}
+
+	// If user forced config import, honor it.
+	if strings.TrimSpace(cfg.Import) != "" {
+		imports.Config = strings.TrimSpace(cfg.Import)
+		return
+	}
+
+	// If already set, keep it.
+	if strings.TrimSpace(imports.Config) != "" {
+		return
+	}
+
+	// Prefer whatever the project already uses in source files
+	if gi, ok := findImportByAliasOrSuffix(scanned, "config", "/config"); ok {
+		imports.Config = gi.Path
+		return
+	}
+
+	// Fallback: use project go.mod + ./config directory
+	modRoot, modPath, err := findModule(pkgDir)
+	if err != nil {
+		die("cannot infer " + ctx + ": config enabled but not imported in sources and cannot find project go.mod: " + err.Error())
+	}
+	pkgImport, perr := moduleImportPathForDir(modRoot, modPath, pkgDir)
+	if perr != nil || strings.TrimSpace(pkgImport) == "" {
+		msg := "cannot infer " + ctx + ": cannot compute project pkg import for " + filepath.ToSlash(pkgDir)
+		if perr != nil {
+			msg += ": " + perr.Error()
+		}
+		die(msg)
+	}
+	if !dirExists(filepath.Join(pkgDir, "config")) {
+		die("cannot infer " + ctx + ": config enabled but ./config directory not found in " + filepath.ToSlash(pkgDir) + " (and not imported in sources)")
+	}
+	imports.Config = pkgImport + "/config"
+}
+
+// inferDIImport populates imports.DI (always needed). Prefer scanned imports, else infer from di2 module.
+func inferDIImport(imports *Imports, scanned []GoImport, runtimePkgAlias, preferSuffix string) {
+	if strings.TrimSpace(imports.DI) != "" {
+		return
+	}
+	if gi, ok := findImportByAliasOrSuffix(scanned, runtimePkgAlias, preferSuffix); ok {
+		imports.DI = gi.Path
+		return
+	}
+	imports.DI = inferDIRuntimeImportFromDI2Module(runtimePkgAlias)
+}
+
 // -------------------------
 // Import inference
 // -------------------------
@@ -376,102 +439,18 @@ func validateGraphSpec(g *GraphSpec) {
 
 func inferImportsForService(s *ServiceSpec, outPath string) {
 	pkgDir := filepath.Dir(outPath)
-
-	// Scan "original" source files in the target package directory
 	scanned := scanPackageImports(pkgDir)
 
-	// --- CONFIG (optional) ---
-	if s.Config.Enabled {
-		// If user forced config import, honor it.
-		if strings.TrimSpace(s.Config.Import) != "" {
-			s.Imports.Config = strings.TrimSpace(s.Config.Import)
-		} else if strings.TrimSpace(s.Imports.Config) == "" {
-			// Prefer whatever the project already uses in source files
-			if gi, ok := findImportByAliasOrSuffix(scanned, "config", "/config"); ok {
-				s.Imports.Config = gi.Path
-			}
-		}
-
-		// Fallback: use project go.mod if still missing
-		if strings.TrimSpace(s.Imports.Config) == "" {
-			modRoot, modPath, err := findModule(pkgDir)
-			if err != nil {
-				die("cannot infer imports.config (service): config enabled, but no config import in sources and cannot find project go.mod: " + err.Error())
-			}
-			pkgImport, perr := moduleImportPathForDir(modRoot, modPath, pkgDir)
-			if perr != nil || strings.TrimSpace(pkgImport) == "" {
-				msg := "cannot infer imports.config (service): cannot compute project pkg import for " + filepath.ToSlash(pkgDir)
-				if perr != nil {
-					msg += ": " + perr.Error()
-				}
-				die(msg)
-			}
-			if !dirExists(filepath.Join(pkgDir, "config")) {
-				die("cannot infer imports.config (service): config enabled but ./config directory not found in " + filepath.ToSlash(pkgDir) + " (and not imported in sources)")
-			}
-			s.Imports.Config = pkgImport + "/config"
-		}
-	} else {
-		// config disabled: ensure empty so template doesn't import it
-		s.Imports.Config = ""
-	}
-
-	// --- DI (always needed because BuildWith(reg di.Registry) exists) ---
-	if strings.TrimSpace(s.Imports.DI) == "" {
-		// Prefer what project already imports in package sources (allows override/fork)
-		if gi, ok := findImportByAliasOrSuffix(scanned, "di", "/di"); ok {
-			s.Imports.DI = gi.Path
-		} else {
-			// Otherwise: infer DI runtime import from the DI library module (module containing di2)
-			s.Imports.DI = inferDIRuntimeImportFromDI2Module("di")
-		}
-	}
+	inferOptionalConfigImport(&s.Config, &s.Imports, scanned, pkgDir, "imports.config (service)")
+	inferDIImport(&s.Imports, scanned, "di", "/di")
 }
 
 func inferImportsForGraph(g *GraphSpec, outPath string) {
 	pkgDir := filepath.Dir(outPath)
 	scanned := scanPackageImports(pkgDir)
 
-	// CONFIG (optional)
-	if g.Config.Enabled {
-		if strings.TrimSpace(g.Config.Import) != "" {
-			g.Imports.Config = strings.TrimSpace(g.Config.Import)
-		} else if strings.TrimSpace(g.Imports.Config) == "" {
-			if gi, ok := findImportByAliasOrSuffix(scanned, "config", "/config"); ok {
-				g.Imports.Config = gi.Path
-			}
-		}
-
-		if strings.TrimSpace(g.Imports.Config) == "" {
-			modRoot, modPath, err := findModule(pkgDir)
-			if err != nil {
-				die("cannot infer graph imports.config: config enabled but not imported in sources and cannot find project go.mod: " + err.Error())
-			}
-			pkgImport, perr := moduleImportPathForDir(modRoot, modPath, pkgDir)
-			if perr != nil || strings.TrimSpace(pkgImport) == "" {
-				msg := "cannot infer graph imports.config: cannot compute project pkg import for " + filepath.ToSlash(pkgDir)
-				if perr != nil {
-					msg += ": " + perr.Error()
-				}
-				die(msg)
-			}
-			if !dirExists(filepath.Join(pkgDir, "config")) {
-				die("cannot infer graph imports.config: config enabled but ./config directory not found in " + filepath.ToSlash(pkgDir) + " (and not imported in sources)")
-			}
-			g.Imports.Config = pkgImport + "/config"
-		}
-	} else {
-		g.Imports.Config = ""
-	}
-
-	// DI (always needed because reg di.Registry exists in graph signature)
-	if strings.TrimSpace(g.Imports.DI) == "" {
-		if gi, ok := findImportByAliasOrSuffix(scanned, "di", "/di"); ok {
-			g.Imports.DI = gi.Path
-		} else {
-			g.Imports.DI = inferDIRuntimeImportFromDI2Module("di")
-		}
-	}
+	inferOptionalConfigImport(&g.Config, &g.Imports, scanned, pkgDir, "graph imports.config")
+	inferDIImport(&g.Imports, scanned, "di", "/di")
 }
 
 // inferDIRuntimeImportFromDI2Module computes the import path for the DI runtime package
