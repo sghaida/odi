@@ -50,8 +50,9 @@ var (
 type DependencyKey string
 
 // Key converts a string into a DependencyKey.
+// Prefer package-level constants for keys in production wiring.
 //
-// This is a small convenience for defining keys (often as constants).
+//This is a small convenience for defining keys (often as constants).
 func Key(name string) DependencyKey { return DependencyKey(name) }
 
 // DuplicateKeyError is returned when an injector attempts to register a dependency
@@ -119,6 +120,14 @@ func (e NilBindError) Error() string {
 // Val is the constructed value.
 // Deps stores dependency pointers keyed by DependencyKey for introspection/debugging.
 //
+// A Service[T] holds:
+//   - Val: the constructed *T
+//   - Deps: a dependency bag storing injected values by DependencyKey for introspection
+//
+// Services are wired explicitly by applying Injector[T] functions via With / WithAll.
+// Successful injections store the dependency value in Deps and also bind it onto Val
+// (typically by assigning a field or calling a setter).
+//
 // The dependency bag is intentionally loose (map[DependencyKey]any) so you can attach
 // any pointer type without restricting user code.
 //
@@ -138,7 +147,8 @@ func (s *Service[T]) Value() *T { return s.Val }
 
 // Injector mutates a Service in-place and returns an error if wiring fails.
 //
-// Injectors are applied via (*Service[T]).With or WithAll.
+// Injectors mutate the target Service[T] in place (attach dependencies) and may return
+// a structured error. They are intended to be composed via With / WithAll.
 type Injector[T any] func(*Service[T]) error
 
 // With applies a single injector to the Service.

@@ -1,3 +1,7 @@
+// Package v1 contains the runnable example(s) for the v1 approach.
+//
+// v1 focuses on explicit wiring via small injector functions and the ability
+// to introspect what was injected, while keeping the success path lightweight.
 package main
 
 import (

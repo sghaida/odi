@@ -1,3 +1,7 @@
+// Package v2 contains the runnable example(s) for the v2 approach.
+//
+// v2 favors simple constructors and explicit manual wiring without any generator,
+// keeping the model minimal and easy to understand.
 package main
 
 import (
